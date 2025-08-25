@@ -202,7 +202,24 @@ class SaleDetailView(LoginRequiredMixin, DetailView):
 
     model = Sale
     template_name = "transactions/saledetail.html"
+    
+class SaleUpdateView(LoginRequiredMixin, UpdateView):
+    model = Sale
+    fields = [
+        'customer', 'sub_total', 'grand_total',
+        'tax_amount', 'tax_percentage',
+        'amount_paid', 'amount_change'
+    ]
+    template_name = "transactions/sale_update.html"
 
+    def form_valid(self, form):
+        sale = form.save(commit=False)
+        # Recalculer le reste à payer
+        sale.amount_change = sale.amount_paid - sale.grand_total
+        return super().form_valid(form)
+
+    def get_success_url(self):
+        return reverse("saleslist")
 
 def SaleCreateView(request):
     context = {

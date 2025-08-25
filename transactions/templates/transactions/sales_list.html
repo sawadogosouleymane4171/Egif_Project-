@@ -87,7 +87,8 @@
                     <a class="btn btn-outline-info btn-sm" href="{% url 'sale-detail' sale.id %}">
                         <i class="fa-solid fa-eye"></i> View Details
                     </a>
-                   
+                    <a class="btn btn-outline-warning btn-sm" href="{% url 'sale-update' sale.id %}">
+                        <i class="fa-solid fa-pen-to-square"></i> Edit
                     <a
                         class="btn btn-outline-danger btn-sm" href="{% url 'sale-delete' sale.id %}">
                         <i class="fa-solid fa-trash"></i> Delete
