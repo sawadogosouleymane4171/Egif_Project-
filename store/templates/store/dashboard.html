@@ -1,128 +1,467 @@
 {% extends "store/base.html" %}
 {% load static %}
+
 {% block title %}Dashboard{% endblock title %}
 
 {% block content %}
-<!-- Dashboard -->
 <div class="d-flex flex-column flex-lg-row h-lg-full bg-surface-secondary">
-    {% load static %}
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.4/dist/Chart.min.js"></script>
-    <!-- Main content -->
-    <div class="h-screen flex-grow-1 overflow-y-lg-auto">
-        <!-- Main -->
-        <main class="py-6 bg-surface-secondary">
-            <div class="container-fluid">
-                <!-- Card stats -->
-                <div class="row g-6 mb-6">
-                    <style>
-                        a {
-                            text-decoration: none;
-                        }
-                    </style>
-                    <div class="col-xl-3 col-sm-6 col-12" id="products">
-                        <a href="{% url 'productslist' %}">
-                            <div class="card shadow border-0">
-                                <div class="card-body">
-                                    <div class="row">
-                                        <div class="col">
-                                            <span class="h6 font-semibold text-muted text-sm d-block mb-2">Products</span>
-                                            <span class="h3 font-bold mb-0">{{total_items}}</span>
-                                        </div>
-                                        <div class="col-auto">
-                                            <div class="icon icon-shape bg-tertiary text-white text-lg rounded-circle">
-                                                <i class="fa fa-clipboard-list"></i>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="mt-2 mb-0 text-sm">
-                                        <span class="badge badge-pill bg-soft-success text-success me-2">
-                                            <i class="fa fa-arrow-up me-1"></i>13%
-                                        </span>
-                                        <span class="text-nowrap text-xs text-muted">Since last month</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </a>
+
+  <!-- Main content -->
+  <div class="h-screen flex-grow-1 overflow-y-lg-auto">
+    <main class="py-6 bg-surface-secondary">
+      <div class="container-fluid">
+
+        <!-- Top cards -->
+        <style>
+          a.card-link { text-decoration: none; color: inherit; }
+          .card .icon { width:48px; height:48px; display:flex; align-items:center; justify-content:center; }
+          /* Chart wrapper presets */
+          .chart-wrapper { width: 100%; height: 360px; max-height: 480px; position: relative; }
+          @media (max-width: 992px) { .chart-wrapper { height: 320px; } }
+          @media (max-width: 576px) { .chart-wrapper { height: 260px; } }
+          /* small utility */
+          .text-muted-small { font-size: 0.9rem; color: #6c757d; }
+
+          /* placeholder shown when chart has no data */
+          .chart-empty {
+            position: absolute;
+            inset: 0;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            pointer-events: none;
+            font-size: 1rem;
+            color: #6c757d;
+            background: rgba(255,255,255,0.6);
+          }
+
+          /* small lists */
+          .small-list-item { padding: .35rem 0; border-bottom: 1px dashed #eee; }
+          .small-list-item:last-child { border-bottom: none; }
+          .status-badge { font-size: 0.85rem; padding: .25rem .6rem; border-radius: .5rem; }
+        </style>
+
+        <div class="row g-6 mb-6">
+
+          <!-- Products -->
+          <div class="col-xl-3 col-sm-6 col-12">
+            <a class="card-link" href="{% url 'productslist' %}" aria-label="Products list">
+              <div class="card shadow border-0">
+                <div class="card-body">
+                  <div class="row align-items-center">
+                    <div class="col">
+                      <span class="h6 text-muted d-block mb-2">Products</span>
+                      <span class="h3 font-bold mb-0">{{ total_items|default:0 }}</span>
                     </div>
-                    <div class="col-xl-3 col-sm-6 col-12" id="profiles">
-                        <a href="{% url 'profile_list' %}">
-                            <div class="card shadow border-0">
-                                <div class="card-body">
-                                    <div class="row">
-                                        <div class="col">
-                                            <span class="h6 font-semibold text-muted text-sm d-block mb-2">Staff</span>
-                                            <span class="h3 font-bold mb-0">{{profiles_count}}</span>
-                                        </div>
-                                        <div class="col-auto">
-                                            <div class="icon icon-shape bg-primary text-white text-lg rounded-circle">
-                                                <i class="fa-solid fa fa-users"></i>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="mt-2 mb-0 text-sm">
-                                        <span class="badge badge-pill bg-soft-success text-success me-2">
-                                            <i class="fa fa-arrow-up me-1"></i>30%
-                                        </span>
-                                        <span class="text-nowrap text-xs text-muted">Since last month</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </a>
+                    <div class="col-auto">
+                      <div class="icon bg-tertiary text-white rounded-circle" aria-hidden="true">
+                        <i class="fa fa-clipboard-list"></i>
+                      </div>
                     </div>
-                    <div class="col-xl-3 col-sm-6 col-12" id="deliveries">
-                        <a href="{% url 'deliveries' %}">
-                            <div class="card shadow border-0">
-                                <div class="card-body">
-                                    <div class="row">
-                                        <div class="col">
-                                            <span class="h6 font-semibold text-muted text-sm d-block mb-2">Pending deliveries</span>
-                                            <span class="h3 font-bold mb-0">{{delivery.count}}</span>
-                                        </div>
-                                        <div class="col-auto">
-                                            <div class="icon icon-shape bg-info text-white text-lg rounded-circle">
-                                                <i class="fa fa-truck"></i>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="mt-2 mb-0 text-sm">
-                                        <span class="badge badge-pill bg-soft-danger text-danger me-2">
-                                            <i class="fa fa-arrow-down me-1"></i>-5%
-                                        </span>
-                                        <span class="text-nowrap text-xs text-muted">Since last month</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </a>
-                    </div>
-                    <div class="col-xl-3 col-sm-6 col-12" id="sales">
-                        <a href="{% url 'saleslist' %}">
-                            <div class="card shadow border-0">
-                                <div class="card-body">
-                                    <div class="row">
-                                        <div class="col">
-                                            <span class="h6 font-semibold text-muted text-sm d-block mb-2">Sales</span>
-                                            <span class="h3 font-bold mb-0">{{sales.count}}</span>
-                                        </div>
-                                        <div class="col-auto">
-                                            <div class="icon icon-shape bg-warning text-white text-lg rounded-circle">
-                                                <i class="fa fa-shopping-cart"></i>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="mt-2 mb-0 text-sm">
-                                        <span class="badge badge-pill bg-soft-success text-success me-2">
-                                            <i class="fa fa-arrow-up me-1"></i>10%
-                                        </span>
-                                        <span class="text-nowrap text-xs text-muted">Since last month</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </a>
-                    </div>
+                  </div>
+                  <div class="mt-2 text-muted-small">
+                    <small>Since last month • <span class="text-success">+13%</span></small>
+                  </div>
                 </div>
-                {% include 'store/charts.html' %}
+              </div>
+            </a>
+          </div>
+
+          <!-- Staff -->
+          <div class="col-xl-3 col-sm-6 col-12">
+            <a class="card-link" href="{% url 'profile_list' %}" aria-label="Staff list">
+              <div class="card shadow border-0">
+                <div class="card-body">
+                  <div class="row align-items-center">
+                    <div class="col">
+                      <span class="h6 text-muted d-block mb-2">Staff</span>
+                      <span class="h3 font-bold mb-0">{{ profiles_count|default:0 }}</span>
+                    </div>
+                    <div class="col-auto">
+                      <div class="icon bg-primary text-white rounded-circle" aria-hidden="true">
+                        <i class="fa fa-users"></i>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="mt-2 text-muted-small">
+                    <small>Since last month • <span class="text-success">+30%</span></small>
+                  </div>
+                </div>
+              </div>
+            </a>
+          </div>
+
+          <!-- Pending deliveries -->
+          <div class="col-xl-3 col-sm-6 col-12">
+            <a class="card-link" href="{% url 'deliveries' %}" aria-label="Pending deliveries">
+              <div class="card shadow border-0">
+                <div class="card-body">
+                  <div class="row align-items-center">
+                    <div class="col">
+                      <span class="h6 text-muted d-block mb-2">Deliveries</span>
+                      <span class="h3 font-bold mb-0">{{ deliveries_total|default:delivery_count|default:0 }}</span>
+                    </div>
+                    <div class="col-auto">
+                      <div class="icon bg-info text-white rounded-circle" aria-hidden="true">
+                        <i class="fa fa-truck"></i>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="mt-2 text-muted-small">
+                    <small>By status:
+                      {% if deliveries_by_status %}
+                        {% for key, val in deliveries_by_status.items %}
+                          {% if key == 'Delivered' %}
+                            <span class="status-badge badge bg-success text-white ms-1">{{ key }}: {{ val }}</span>
+                          {% elif key == 'Pending' %}
+                            <span class="status-badge badge bg-warning text-dark ms-1">{{ key }}: {{ val }}</span>
+                          {% else %}
+                            <span class="status-badge badge bg-light text-dark ms-1">{{ key }}: {{ val }}</span>
+                          {% endif %}
+                        {% endfor %}
+                      {% else %}
+                        <span class="text-muted-small">No data</span>
+                      {% endif %}
+                    </small>
+                  </div>
+                </div>
+              </div>
+            </a>
+          </div>
+
+          <!-- Sales -->
+          <div class="col-xl-3 col-sm-6 col-12">
+            <a class="card-link" href="{% url 'saleslist' %}" aria-label="Sales list">
+              <div class="card shadow border-0">
+                <div class="card-body">
+                  <div class="row align-items-center">
+                    <div class="col">
+                      <span class="h6 text-muted d-block mb-2">Sales</span>
+                      <span class="h3 font-bold mb-0">{{ sales_count|default:0 }}</span>
+                    </div>
+                    <div class="col-auto">
+                      <div class="icon bg-warning text-white rounded-circle" aria-hidden="true">
+                        <i class="fa fa-shopping-cart"></i>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="mt-2 text-muted-small">
+                    <small>Since last month • <span class="text-success">+10%</span></small>
+                  </div>
+                </div>
+              </div>
+            </a>
+          </div>
+
+        </div> <!-- end top cards -->
+
+        <!-- Global stats -->
+        <div class="row mb-4">
+          <div class="col-md-3">
+            <div class="card text-center shadow-sm">
+              <div class="card-body">
+                <h5 class="card-title">Total Sales</h5>
+                <p class="display-6">{{ total_sales|default:0 }}</p>
+              </div>
             </div>
-        </main>
-    </div>
+          </div>
+
+          <div class="col-md-3">
+            <div class="card text-center shadow-sm">
+              <div class="card-body">
+                <h5 class="card-title">Revenue</h5>
+                <p class="display-6">{{ total_revenue|default:0|floatformat:2 }} {{ currency|default:"FCFA" }}</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-md-3">
+            <div class="card text-center shadow-sm">
+              <div class="card-body">
+                <h5 class="card-title">Products</h5>
+                <p class="display-6">{{ total_products|default:0 }}</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-md-3">
+            <div class="card text-center shadow-sm">
+              <div class="card-body">
+                <h5 class="card-title">Low stock</h5>
+                <p class="display-6 text-danger">{{ low_stock_count|default:0 }}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Charts and low-stock list -->
+        <div class="row mb-4">
+          <div class="col-lg-8">
+            <div class="card shadow-sm">
+              <div class="card-body">
+                <h5 class="card-title">Sales trend</h5>
+                <div class="chart-wrapper">
+                  <canvas id="salesChart" aria-label="Sales trend chart" role="img" style="width:100%; height:100%;"></canvas>
+                  <div id="sales-chart-placeholder" class="chart-empty" style="display:none;">
+                    No sales data yet
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-lg-4">
+            <div class="card shadow-sm mb-3">
+              <div class="card-body">
+                <h5 class="card-title">Low stock alerts</h5>
+                <ul class="list-unstyled mb-0">
+                  {% for product in low_stock_products %}
+                    <li class="text-danger small-list-item">{{ product.name }} ({{ product.quantity }})</li>
+                  {% empty %}
+                    <li>No low-stock products</li>
+                  {% endfor %}
+                </ul>
+              </div>
+            </div>
+
+            <div class="card shadow-sm">
+              <div class="card-body">
+                <h5 class="card-title">Deliveries (recent)</h5>
+                <ul class="list-unstyled mb-0">
+                  {% for d in recent_deliveries %}
+                    <li class="small-list-item">
+                      <strong>{{ d.customer_label }}</strong>
+                      <div class="text-muted-small">
+                        {% if d.date %}{{ d.date|date:"Y-m-d H:i" }}{% else %}--{% endif %}
+                        {% if d.status_label %} • <em>{{ d.status_label }}</em>{% endif %}
+                        {% if d.location %} • {{ d.location }}{% endif %}
+                        {% if d.phone_number %} • {{ d.phone_number }}{% endif %}
+                      </div>
+                    </li>
+                  {% empty %}
+                    <li>No recent deliveries</li>
+                  {% endfor %}
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Deliveries chart + recent sales & top items -->
+        <div class="row mb-4">
+          <div class="col-lg-6">
+            <div class="card shadow-sm">
+              <div class="card-body">
+                <h5 class="card-title">Deliveries trend</h5>
+                <div class="chart-wrapper">
+                  <canvas id="deliveriesChart" aria-label="Deliveries trend chart" role="img" style="width:100%; height:100%;"></canvas>
+                  <div id="deliveries-chart-placeholder" class="chart-empty" style="display:none;">
+                    No deliveries data yet
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-lg-6">
+            <div class="row g-3">
+              <div class="col-12">
+                <div class="card shadow-sm">
+                  <div class="card-body">
+                    <h5 class="card-title">Recent Sales</h5>
+                    <ul class="list-unstyled mb-0">
+                      {% for s in recent_sales %}
+                        <li class="small-list-item">
+                          <strong>Sale #{{ s.id }}</strong>
+                          <div class="text-muted-small">
+                            {% if s.date_added %}{{ s.date_added|date:"Y-m-d H:i" }} •{% endif %}
+                            {{ s.grand_total|default:0|floatformat:2 }} {{ currency|default:"FCFA" }}
+                            {% if s.customer and s.customer.phone %} • {{ s.customer.phone }}{% endif %}
+                          </div>
+                        </li>
+                      {% empty %}
+                        <li>No recent sales</li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              <div class="col-12">
+                <div class="card shadow-sm">
+                  <div class="card-body">
+                    <h5 class="card-title">Top selling items</h5>
+                    <ul class="list-unstyled mb-0">
+                      {% for it in top_items %}
+                        <li class="small-list-item">
+                          <strong>{{ it.name }}</strong>
+                          <div class="text-muted-small">Sold: {{ it.qty }}</div>
+                        </li>
+                      {% empty %}
+                        <li>No top items data</li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick actions -->
+        <div class="row mb-4">
+          <div class="col d-flex justify-content-center gap-3 flex-wrap">
+            <a href="{% url 'sale-create' %}" class="btn btn-success btn-lg" aria-label="Create sale">
+              <i class="fas fa-plus"></i> New Sale
+            </a>
+            <a href="{% url 'product-create' %}" class="btn btn-primary btn-lg" aria-label="Create product">
+              <i class="fas fa-plus"></i> New Product
+            </a>
+            <a href="{% url 'saleslist' %}" class="btn btn-info btn-lg" aria-label="Sales list">
+              <i class="fas fa-list"></i> Sales List
+            </a>
+            <a href="{% url 'productslist' %}" class="btn btn-secondary btn-lg" aria-label="Products list">
+              <i class="fas fa-list"></i> Products List
+            </a>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  </div>
 </div>
+
+{# Safely expose the data for Chart.js. If variables are missing, we explicitly fallback to an empty array #}
+{{ sales_dates|default:"[]"|json_script:"sales-dates" }}
+{{ sales_values|default:"[]"|json_script:"sales-values" }}
+{{ delivery_months|default:"[]"|json_script:"delivery-months" }}
+{{ delivery_counts|default:"[]"|json_script:"delivery-counts" }}
+{{ top_items|default:"[]"|json_script:"top-items" }}
+
+<!-- Chart.js (v2.x) -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@2.9.4/dist/Chart.min.js" defer></script>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  /* ---------- Sales chart (existing logic) ---------- */
+  const datesEl = document.getElementById('sales-dates');
+  const valuesEl = document.getElementById('sales-values');
+  const placeholder = document.getElementById('sales-chart-placeholder');
+  const canvas = document.getElementById('salesChart');
+
+  function safeParseJson(el) {
+    if (!el) return [];
+    try { return JSON.parse(el.textContent || '[]'); } catch (e) { console.error('JSON parse error', e); return []; }
+  }
+
+  let salesDates = safeParseJson(datesEl);
+  let salesValues = safeParseJson(valuesEl);
+
+  if (!Array.isArray(salesDates)) salesDates = [];
+  if (!Array.isArray(salesValues)) salesValues = [];
+
+  if (salesDates.length === 0 || salesValues.length === 0 || salesValues.every(v => Number(v) === 0)) {
+    if (placeholder) placeholder.style.display = 'flex';
+  } else {
+    // create sales chart
+    const ctx = canvas.getContext('2d');
+    if (canvas._chartInstance) { try { canvas._chartInstance.destroy(); } catch(e){} canvas._chartInstance = null; }
+    const wrapper = canvas.closest('.chart-wrapper');
+    if (wrapper) {
+      const rect = wrapper.getBoundingClientRect();
+      canvas.width = Math.round(rect.width * (window.devicePixelRatio || 1));
+      canvas.height = Math.round(rect.height * (window.devicePixelRatio || 1));
+      canvas.style.width = rect.width + 'px';
+      canvas.style.height = rect.height + 'px';
+    }
+    canvas._chartInstance = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: salesDates,
+        datasets: [{
+          label: 'Revenue',
+          data: salesValues,
+          borderColor: 'rgba(75, 192, 192, 1)',
+          backgroundColor: 'rgba(75, 192, 192, 0.08)',
+          fill: true,
+          lineTension: 0.2,
+          pointRadius: 3
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        legend: { display: true },
+        scales: {
+          yAxes: [{ ticks: { beginAtZero: true } }],
+          xAxes: [{ ticks: { autoSkip: true, maxTicksLimit: 12 }, gridLines: { display: false } }]
+        },
+        tooltips: { mode: 'index', intersect: false }
+      }
+    });
+  }
+
+  /* ---------- Deliveries chart (new) ---------- */
+  const dMonthsEl = document.getElementById('delivery-months');
+  const dCountsEl = document.getElementById('delivery-counts');
+  const dPlaceholder = document.getElementById('deliveries-chart-placeholder');
+  const dCanvas = document.getElementById('deliveriesChart');
+
+  let deliveryMonths = safeParseJson(dMonthsEl);
+  let deliveryCounts = safeParseJson(dCountsEl);
+
+  if (!Array.isArray(deliveryMonths)) deliveryMonths = [];
+  if (!Array.isArray(deliveryCounts)) deliveryCounts = [];
+
+  if (deliveryMonths.length === 0 || deliveryCounts.length === 0 || deliveryCounts.every(v => Number(v) === 0)) {
+    if (dPlaceholder) dPlaceholder.style.display = 'flex';
+  } else {
+    const dctx = dCanvas.getContext('2d');
+    if (dCanvas._chartInstance) { try { dCanvas._chartInstance.destroy(); } catch(e){} dCanvas._chartInstance = null; }
+    const wrapper = dCanvas.closest('.chart-wrapper');
+    if (wrapper) {
+      const rect = wrapper.getBoundingClientRect();
+      dCanvas.width = Math.round(rect.width * (window.devicePixelRatio || 1));
+      dCanvas.height = Math.round(rect.height * (window.devicePixelRatio || 1));
+      dCanvas.style.width = rect.width + 'px';
+      dCanvas.style.height = rect.height + 'px';
+    }
+    dCanvas._chartInstance = new Chart(dctx, {
+      type: 'bar',
+      data: {
+        labels: deliveryMonths,
+        datasets: [{
+          label: 'Deliveries',
+          data: deliveryCounts,
+          borderColor: 'rgba(54, 162, 235, 1)',
+          backgroundColor: 'rgba(54, 162, 235, 0.6)',
+          borderWidth: 1
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        legend: { display: false },
+        scales: {
+          yAxes: [{ ticks: { beginAtZero: true } }],
+          xAxes: [{ ticks: { autoSkip: true, maxTicksLimit: 12 }, gridLines: { display: false } }]
+        },
+        tooltips: { mode: 'index', intersect: false }
+      }
+    });
+  }
+
+  /* ---------- Small: render top items if needed (client side fallback) ---------- */
+  try {
+    const topItemsEl = document.getElementById('top-items');
+    if (topItemsEl) {
+      const topItems = JSON.parse(topItemsEl.textContent || '[]');
+      // top items are already rendered server-side; this is only a fallback place-holder for possible client updates
+      // console.log('Top items (JS):', topItems);
+    }
+  } catch (e) { /* ignore */ }
+});
+</script>
+
 {% endblock content %}

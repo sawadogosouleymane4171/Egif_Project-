@@ -1,11 +1,35 @@
 from django import forms
+from django.core.exceptions import ValidationError
 from .models import Item, Category, Delivery
+
+def validate_image(file):
+    """
+    Valide le type et la taille de l'image uploadée.
+    - formats autorisés : jpeg, png, gif, webp
+    - taille max : 5 MB
+    """
+    content_type = getattr(file, 'content_type', '')
+    valid_content_types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
+    max_size = 5 * 1024 * 1024  # 5 MB
+
+    if content_type not in valid_content_types:
+        raise ValidationError('Format d\'image non supporté. Utilisez JPEG, PNG, GIF ou WEBP.')
+
+    if file.size > max_size:
+        raise ValidationError('Taille du fichier trop grande. Taille maximale autorisée : 5 MB.')
 
 
 class ItemForm(forms.ModelForm):
     """
     A form for creating or updating an Item in the inventory.
     """
+    image = forms.ImageField(
+        required=False,
+        widget=forms.ClearableFileInput(attrs={'class': 'form-control-file'}),
+        validators=[validate_image],
+        help_text="Image optionnelle (JPEG/PNG/GIF/WEBP | max 5 MB)."
+    )
+    
     class Meta:
         model = Item
         fields = [
@@ -15,7 +39,8 @@ class ItemForm(forms.ModelForm):
             'quantity',
             'price',
             'expiring_date',
-            'vendor'
+            'vendor',
+            'image',
         ]
         widgets = {
             'name': forms.TextInput(attrs={'class': 'form-control'}),

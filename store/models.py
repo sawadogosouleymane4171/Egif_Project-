@@ -48,6 +48,23 @@ class Item(models.Model):
     price = models.FloatField(default=0)
     expiring_date = models.DateTimeField(null=True, blank=True)
     vendor = models.ForeignKey(Vendor, on_delete=models.SET_NULL, null=True)
+    
+     # --- CHAMP IMAGE ---
+    image = models.ImageField(
+        upload_to='product_images/',
+        blank=True,
+        null=True,
+        help_text="Optional product image. Stored under MEDIA_ROOT/product_images/"
+    )
+
+    # --- example imagekit thumbnail (OPTIONAL) ---
+    # if you use imagekit and want a generated thumbnail, uncomment imports above
+    # and the line below. The thumbnail is not required for uploads; it's generated.
+    # thumbnail = ImageSpecField(source='image',
+    #                            processors=[ResizeToFill(200, 200)],
+    #                            format='JPEG',
+    #                            options={'quality': 80})
+
 
     def __str__(self):
         """

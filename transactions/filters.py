@@ -12,3 +12,4 @@ class PurchaseFilter(django_filters.FilterSet):
     class Meta:
         model = Purchase
         fields = ['item', 'vendor', 'delivery_status']
+

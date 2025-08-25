@@ -223,3 +223,20 @@ a {
 .navbar .navbar-nav > li > a > i {
   font-size: 18px;
 }
+/* vignette produit (Select2 + table) */
+.item-thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 6px;
+  margin-right: 10px;
+  display: inline-block;
+  vertical-align: middle;
+}
+.select2-result-item { display:flex; align-items:center; gap:8px; }
+.select2-selection__rendered .item-thumb { width:28px; height:28px; margin-right:8px; }
+
+.item-thumb { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; margin-right: 8px; }
+.select2-result-item { display:flex; align-items:center; gap:8px; }
+.select2-selection__rendered .item-thumb { width:24px; height:24px; margin-right:6px; border-radius:4px; }
+

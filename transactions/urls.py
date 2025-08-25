@@ -16,7 +16,10 @@ from .views import (
     SaleDeleteView,
 
     export_sales_to_excel,
-    export_purchases_to_excel
+    export_purchases_to_excel,
+    get_items,
+    
+    
 )
 
 # URL patterns
@@ -44,15 +47,16 @@ urlpatterns = [
     path('sales/', SaleListView.as_view(), name='saleslist'),
     path('sale/<int:pk>/', SaleDetailView.as_view(), name='sale-detail'),
     path('new-sale/', SaleCreateView, name='sale-create'),
-    path(
-         'sale/<slug:slug>/delete/', SaleDeleteView.as_view(),
-         name='sale-delete'
-     ),
+    path('sale/<int:pk>/delete/', SaleDeleteView.as_view(), name='sale-delete'),
 
     # Sales and purchases export
     path('sales/export/', export_sales_to_excel, name='sales-export'),
     path('purchases/export/', export_purchases_to_excel,
          name='purchases-export'),
+    path('ajax/get-items/', get_items, name='get_items'),
+    # (optionnel pour debug) path('ajax/get-items-test/', views.get_items_test, name='get_items_test'),
+   
+
 ]
 
 # Static media files configuration for development

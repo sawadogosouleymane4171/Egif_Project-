@@ -31,11 +31,14 @@
     </div>
 
     <div class="px-4">
-        <table class="table table-bordered table-striped table-hover table-sm">
+        <table class="table table-bordered table-striped table-hover table-sm align-middle">
             <thead class="thead-light">
                 <tr>
+                   
                     <th scope="col"><a href="{% querystring table.prefixed_order_by_field=column.order_by_alias.next %}">ID <i class="fa-solid fa-sort"></i></a></th>
+                    <th scope="col">Image</th>
                     <th scope="col">Name <i class="fa-solid fa-sort"></i></th>
+                    
                     <th scope="col">Category <i class="fa-solid fa-sort"></i></th>
                     <th scope="col">Quantity <i class="fa-solid fa-sort"></i></th>
                     <th scope="col">Price <i class="fa-solid fa-sort"></i></th>
@@ -47,19 +50,33 @@
             <tbody>
                 {% for item in items %}
                 <tr>
+                    
                     <th scope="row">{{ item.id }}</th>
+                    <td>
+                        <a href="{% url 'product-detail' item.slug %}">
+                            {% if item.image %}
+                                <img src="{{ item.image.url }}" alt="{{ item.name }}" style="max-height:60px; max-width:80px; object-fit:contain;">
+                            {% else %}
+                                <!-- Put a placeholder image at static/images/placeholder.png -->
+                                <img src="{% static 'images/placeholder.png' %}" alt="no image" style="max-height:60px; max-width:80px; object-fit:contain;">
+                            {% endif %}
+                        </a>
+                    </td>
                     <td>{{ item.name }}</td>
+                    
                     <td>{{ item.category }}</td>
                     <td>{{ item.quantity }}</td>
-                    <td>{{ item.price }}</td>
-                    <td>{{ item.expiring_date }}</td>
+                    <td>{{ item.price|floatformat:2 }}</td>
+                    <td>{% if item.expiring_date %}{{ item.expiring_date|date:"Y-m-d H:i" }}{% endif %}</td>
                     <td>{{ item.vendor }}</td>
                     <td>
-                        <a class="btn btn-outline-info btn-sm" href="{% url 'product-update' item.slug %}">
-                            <i class="fa-solid fa-pen"></i> Edit
+                        <a class="btn btn-sm btn-info rounded-pill shadow-sm" href="{% url 'product-detail' item.slug %}">
+                            <i class="fa-solid fa-eye"></i> View
+                        <a class="btn btn-sm btn-primary rounded-pill shadow-sm" href="{% url 'product-update' item.slug %}">
+                            <i class="fa-solid fa-pen-to-square"></i> Edit
                         </a>
-                        <a class="btn btn-outline-danger btn-sm float-end" href="{% url 'product-delete' item.slug %}">
-                            <i class="fa-solid fa-trash"></i> Delete
+                        <a class="btn btn-sm btn-danger rounded-pill shadow-sm" href="{% url 'product-delete' item.slug %}">
+                            <i class="fa-solid fa-trash"></i> Delete    
                         </a>
                     </td>
                 </tr>

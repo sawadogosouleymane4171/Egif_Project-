@@ -112,3 +112,7 @@ ipython_config.py
 
 # pytype
 .pytype/
+
+# Media & static
+media/
+staticfiles/

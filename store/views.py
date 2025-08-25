@@ -13,6 +13,9 @@ and querying functionalities.
 # Standard library imports
 import operator
 from functools import reduce
+from django.templatetags.static import static
+
+
 
 # Django core imports
 from django.shortcuts import render
@@ -21,6 +24,8 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_POST
 from django.views.decorators.csrf import csrf_exempt
 from django.db.models import Q, Count, Sum
+from django.db.models.functions import TruncMonth
+from django.contrib.auth import get_user_model
 
 # Authentication and permissions
 from django.contrib.auth.decorators import login_required
@@ -43,54 +48,168 @@ from transactions.models import Sale
 from .models import Category, Item, Delivery
 from .forms import ItemForm, CategoryForm, DeliveryForm
 from .tables import ItemTable
+from django.conf import settings
+from django.views.decorators.http import require_http_methods
+
+
+# Si SaleDetail est défini dans transactions.models, on l'importe pour récupérer top items
+try:
+    from transactions.models import Sale, SaleDetail
+except Exception:
+    # Si SaleDetail n'existe pas, on importe au moins Sale pour le dashboard
+    from transactions.models import Sale
+    SaleDetail = None
 
 
 @login_required
 def dashboard(request):
-    profiles = Profile.objects.all()
-    Category.objects.annotate(nitem=Count("item"))
-    items = Item.objects.all()
-    total_items = (
-        Item.objects.all()
-        .aggregate(Sum("quantity"))
-        .get("quantity__sum", 0.00)
-    )
-    items_count = items.count()
-    profiles_count = profiles.count()
+    """
+    Dashboard adapté au modèle Delivery fourni :
+    - utilise Delivery.date comme champ date
+    - utilise Delivery.is_delivered pour les statuts (Delivered / Pending)
+    - normalise recent_deliveries en dicts simples pour le template
+    """
+    # Sales aggregates
+    total_sales = Sale.objects.count()
+    total_revenue = Sale.objects.aggregate(total=Sum('grand_total'))['total'] or 0
+    total_revenue = float(total_revenue)
 
-    # Prepare data for charts
-    category_counts = Category.objects.annotate(
-        item_count=Count("item")
-    ).values("name", "item_count")
-    categories = [cat["name"] for cat in category_counts]
-    category_counts = [cat["item_count"] for cat in category_counts]
+    # Items / stock
+    total_products = Item.objects.count()
+    low_stock_threshold = getattr(settings, 'LOW_STOCK_THRESHOLD', 5)
+    low_stock_products = Item.objects.filter(quantity__lte=low_stock_threshold)
+    low_stock_count = low_stock_products.count()
 
-    sale_dates = (
-        Sale.objects.values("date_added__date")
-        .annotate(total_sales=Sum("grand_total"))
-        .order_by("date_added__date")
+    # Deliveries aggregates (model has: customer_name, phone_number, location, date, is_delivered)
+    deliveries_total = Delivery.objects.count()
+
+    # deliveries_by_status using is_delivered boolean
+    delivered_count = Delivery.objects.filter(is_delivered=True).count()
+    pending_count = Delivery.objects.filter(is_delivered=False).count()
+    deliveries_by_status = {
+        'Delivered': delivered_count,
+        'Pending': pending_count
+    }
+
+    # Recent deliveries ordered by date (most recent first)
+    recent_deliveries_qs = Delivery.objects.order_by('-date')[:10]
+
+    # Normalize recent deliveries to simple dicts for template
+    recent_deliveries = []
+    for d in recent_deliveries_qs:
+        recent_deliveries.append({
+            'id': d.id,
+            'customer_label': d.customer_name or (d.phone_number and str(d.phone_number)) or f'Delivery #{d.id}',
+            'date': d.date,
+            'status_label': 'Delivered' if d.is_delivered else 'Pending',
+            'location': d.location or '',
+            'phone_number': str(d.phone_number) if getattr(d, 'phone_number', None) else ''
+        })
+
+    # Sales by month
+    sales_by_month = (
+        Sale.objects
+        .annotate(month=TruncMonth('date_added'))
+        .values('month')
+        .annotate(revenue=Sum('grand_total'), count=Count('id'))
+        .order_by('month')
     )
-    sale_dates_labels = [
-        date["date_added__date"].strftime("%Y-%m-%d") for date in sale_dates
-    ]
-    sale_dates_values = [float(date["total_sales"]) for date in sale_dates]
+    sales_dates = [entry['month'].strftime('%Y-%m') for entry in sales_by_month]
+    sales_values = [float(entry['revenue'] or 0) for entry in sales_by_month]
+    sales_counts = [int(entry['count']) for entry in sales_by_month]
+
+    # Deliveries by month (use Delivery.date)
+    deliveries_by_month_qs = (
+        Delivery.objects
+        .annotate(month=TruncMonth('date'))
+        .values('month')
+        .annotate(count=Count('id'))
+        .order_by('month')
+    )
+    delivery_months = [entry['month'].strftime('%Y-%m') for entry in deliveries_by_month_qs]
+    delivery_counts = [int(entry['count']) for entry in deliveries_by_month_qs]
+
+    # Recent sales & top items (if SaleDetail exists)
+    recent_sales = Sale.objects.order_by('-date_added')[:10]
+    top_items = []
+    if SaleDetail is not None:
+        top_qs = (
+            SaleDetail.objects
+            .values('item__id', 'item__name')
+            .annotate(total_qty=Sum('quantity'))
+            .order_by('-total_qty')[:10]
+        )
+        top_items = [{'id': e['item__id'], 'name': e['item__name'], 'qty': e['total_qty']} for e in top_qs]
+
+    profiles_count = get_user_model().objects.filter(is_staff=True).count()
 
     context = {
-        "items": items,
-        "profiles": profiles,
-        "profiles_count": profiles_count,
-        "items_count": items_count,
-        "total_items": total_items,
-        "vendors": Vendor.objects.all(),
-        "delivery": Delivery.objects.all(),
-        "sales": Sale.objects.all(),
-        "categories": categories,
-        "category_counts": category_counts,
-        "sale_dates_labels": sale_dates_labels,
-        "sale_dates_values": sale_dates_values,
+        'total_sales': total_sales,
+        'sales_count': total_sales,
+        'total_revenue': total_revenue,
+        'total_products': total_products,
+        'total_items': total_products,
+        'profiles_count': profiles_count,
+        'delivery_count': deliveries_total,
+        'deliveries_total': deliveries_total,
+        'deliveries_by_status': deliveries_by_status,
+        'recent_deliveries': recent_deliveries,
+        'low_stock_count': low_stock_count,
+        'low_stock_products': low_stock_products,
+        'sales_dates': sales_dates,
+        'sales_values': sales_values,
+        'sales_counts': sales_counts,
+        'delivery_months': delivery_months,
+        'delivery_counts': delivery_counts,
+        'recent_sales': recent_sales,
+        'top_items': top_items,
+        'currency': getattr(settings, 'CURRENCY', 'FCFA'),
+        'low_stock_threshold': low_stock_threshold,
     }
-    return render(request, "store/dashboard.html", context)
+    return render(request, 'store/dashboard.html', context)
 
+@require_http_methods(["GET", "POST"])
+
+def get_items_ajax_view(request):
+    """
+    Retourne JSON pour Select2. Accepte GET et POST.
+    Renvoie toujours {'results': [...] } ou [] en cas d'erreur.
+    """
+    try:
+        term = request.GET.get('term', '').strip() if request.method == 'GET' else request.POST.get('term', '').strip()
+
+        qs = Item.objects.all()
+        if term:
+            qs = qs.filter(Q(name__icontains=term) |
+                           Q(description__icontains=term) if hasattr(Item, 'description') else Q(name__icontains=term))
+        qs = qs[:20]
+
+        data = []
+        for item in qs:
+            # safe image URL
+            image_url = ''
+            try:
+                if getattr(item, 'image', None) and hasattr(item.image, 'url'):
+                    image_url = request.build_absolute_uri(item.image.url)
+            except Exception:
+                image_url = ''
+            if not image_url:
+                image_url = request.build_absolute_uri(static('images/placeholder.png'))
+
+            data.append({
+                'id': item.pk,
+                'text': item.name,
+                'name': item.name,
+                'price': float(getattr(item, 'price', 0) or 0),
+                'quantity': int(getattr(item, 'quantity', 0) or 0),
+                'image': image_url
+            })
+
+        return JsonResponse({'results': data}, safe=False)
+
+    except Exception as e:
+        # renvoyer un message d'erreur lisible pour debugging
+        return JsonResponse({'results': [], 'error': str(e)}, status=500)
 
 class ProductListView(LoginRequiredMixin, ExportMixin, tables.SingleTableView):
     """
@@ -136,7 +255,7 @@ class ItemSearchListView(ProductListView):
         return result
 
 
-class ProductDetailView(LoginRequiredMixin, FormMixin, DetailView):
+class ProductDetailView(LoginRequiredMixin, DetailView):
     """
     View class to display detailed information about a product.
 
@@ -382,6 +501,20 @@ def is_ajax(request):
 @csrf_exempt
 @require_POST
 @login_required
+def get_items_ajax_view(request):
+    if is_ajax(request):
+        try:
+            term = request.POST.get("term", "")
+            data = []
+
+            items = Item.objects.filter(name__icontains=term)
+            for item in items[:10]:
+                data.append(item.to_json())
+
+            return JsonResponse(data, safe=False)
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    return JsonResponse({'error': 'Not an AJAX request'}, status=400)
 def get_items_ajax_view(request):
     if is_ajax(request):
         try:

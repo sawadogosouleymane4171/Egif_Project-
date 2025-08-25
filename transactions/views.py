@@ -7,6 +7,8 @@ from django.http import JsonResponse, HttpResponse
 from django.urls import reverse
 from django.shortcuts import render
 from django.db import transaction
+from django.views.decorators.http import require_POST
+from django.db.models import Sum,F
 
 # Class-based views
 from django.views.generic import DetailView, ListView
@@ -23,6 +25,43 @@ from store.models import Item
 from accounts.models import Customer
 from .models import Sale, Purchase, SaleDetail
 from .forms import PurchaseForm
+from store.models import Item
+
+@require_POST
+def get_items(request):
+    """
+         Endpoint utilisé par Select2 (POST).
+         Renvoie une liste JSON d'objets avec au moins 'id' et 'text'.
+        J'ajoute ici également la clé 'image' (URL si disponible) pour pouvoir afficher
+        les miniatures côté front si besoin.
+"""
+    term = request.POST.get('term', '').strip()
+    qs = Item.objects.all()
+    if term:
+       qs = qs.filter(name__icontains=term)
+    qs = qs[:20]
+
+
+    results = []
+    for item in qs:
+      # image handling
+      image_url = ''
+      try:
+        if getattr(item, 'image', None) and hasattr(item.image, 'url'):
+           image_url = item.image.url
+      except Exception:
+        image_url = ''
+
+
+    results.append({
+        "id": item.pk,
+       "text": item.name,
+       "name": item.name,
+      "price": float(item.price) if hasattr(item, 'price') and item.price is not None else 0,
+      "image": image_url,
+    })
+    return JsonResponse(results, safe=False)
+
 
 
 logger = logging.getLogger(__name__)
@@ -143,7 +182,18 @@ class SaleListView(LoginRequiredMixin, ListView):
     context_object_name = "sales"
     paginate_by = 10
     ordering = ['date_added']
-
+    
+    def get_queryset(self):
+# select_related customer, précharger sale details et items
+       # Précharger customer et sale details->item, et annoter la quantité totale vendue
+        qs = (
+            Sale.objects
+            .select_related('customer')
+            .prefetch_related('saledetail_set__item')
+            .annotate(total_qty_sold=Sum('saledetail_set__quantity'))
+            .order_by('-date_added')
+        )
+        return qs
 
 class SaleDetailView(LoginRequiredMixin, DetailView):
     """

@@ -39,6 +39,11 @@
                     <a href="{% url 'category-detail' category.pk %}" class="btn btn-outline-primary btn-sm">
                         <i class="fa-solid fa-info-circle me-2"></i> View Details
                     </a>
+                    <a href="{% url 'category-update' category.pk %}" class="btn btn-outline-secondary btn-sm">
+                        <i class="fa-solid fa-edit me-2"></i> Edit
+                    <a href="{% url 'category-delete' category.pk %}" class="btn btn-outline-danger btn-sm">
+                        <i class="fa-solid fa-trash me-2"></i> Delete
+                    
                 </td>
             </tr>
             {% endfor %}

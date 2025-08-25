@@ -1,3 +1,83 @@
-<div>
-    Product Page
+{% extends "store/base.html" %}
+{% load static %}
+
+{% block title %}{{ item.name }}{% endblock title %}
+
+{% block content %}
+<div class="container my-4">
+  <div class="row">
+    <div class="col-md-8">
+      <div class="card shadow-sm">
+        <div class="row g-0">
+          <div class="col-md-5 p-3 d-flex align-items-center justify-content-center">
+            {% if item.image %}
+              <img src="{{ item.image.url }}" alt="{{ item.name }}" class="img-fluid" style="max-height:360px; object-fit:contain; border:1px solid #e9ecef; background:#fff; padding:6px;">
+            {% else %}
+              <img src="{% static 'images/placeholder.png' %}" alt="No image" class="img-fluid" style="max-height:360px; object-fit:contain; border:1px solid #e9ecef; background:#fff; padding:6px;">
+            {% endif %}
+          </div>
+
+          <div class="col-md-7">
+            <div class="card-body">
+              <h2 class="card-title mb-1">{{ item.name }}</h2>
+              <p class="text-muted mb-2">Category: {{ item.category.name }}</p>
+
+              <p class="mb-3">{{ item.description }}</p>
+
+              <ul class="list-unstyled mb-3">
+                <li><strong>Quantity:</strong> {{ item.quantity }}</li>
+                <li><strong>Price:</strong> {{ item.price|floatformat:2 }} {{ currency|default:"FCFA" }}</li>
+                <li>
+                  <strong>Expiring date:</strong>
+                  {% if item.expiring_date %}
+                    {{ item.expiring_date|date:"Y-m-d H:i" }}
+                  {% else %}
+                    —
+                  {% endif %}
+                </li>
+                <li><strong>Vendor:</strong> {{ item.vendor }}</li>
+              </ul>
+
+              <div class="d-flex gap-2">
+                <a class="btn btn-primary" href="{% url 'product-update' item.slug %}">
+                  <i class="fa fa-pen"></i> Edit
+                </a>
+                <a class="btn btn-danger" href="{% url 'product-delete' item.slug %}">
+                  <i class="fa fa-trash"></i> Delete
+                </a>
+                <a class="btn btn-secondary" href="{% url 'productslist' %}">
+                  <i class="fa fa-arrow-left"></i> Back to list
+                </a>
+              </div>
+            </div>
+          </div>
+        </div> <!-- end row g-0 -->
+      </div> <!-- end card -->
+    </div> <!-- end col -->
+
+    <div class="col-md-4">
+      <div class="card shadow-sm mb-3">
+        <div class="card-body">
+          <h5 class="card-title">Quick info</h5>
+          <p class="mb-1"><strong>ID:</strong> {{ item.id }}</p>
+          <p class="mb-1"><strong>Slug:</strong> {{ item.slug }}</p>
+          <p class="mb-1"><strong>Created:</strong> {{ item.created|default:"-" }}</p>
+          <!-- ajoute d'autres champs utiles si tu veux -->
+        </div>
+      </div>
+
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <h5 class="card-title">Low stock alert</h5>
+          {% if item.quantity <= 5 %}
+            <p class="text-danger">This product is low on stock ({{ item.quantity }} left).</p>
+          {% else %}
+            <p>Stock level is OK.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+  </div> <!-- end row -->
 </div>
+{% endblock content %}

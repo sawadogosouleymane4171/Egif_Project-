@@ -3,6 +3,7 @@ from django_extensions.db.fields import AutoSlugField
 
 from store.models import Item
 from accounts.models import Vendor, Customer
+from django.db.models import Sum
 
 DELIVERY_CHOICES = [("P", "Pending"), ("S", "Successful")]
 
@@ -68,6 +69,39 @@ class Sale(models.Model):
         Returns the total quantity of products in the sale.
         """
         return sum(detail.quantity for detail in self.saledetail_set.all())
+    
+    @property
+    def product_images(self):
+        """
+            Retourne la liste des URLs d'images des items liés à cette vente.
+            Utiliser cette propriété dans les templates : elle renvoie une liste de chaînes (URLs) -
+            celles qui n'ont pas d'image sont simplement ignorées.
+      """
+        images = []
+          # Utiliser select_related si possible depuis la view pour optimiser la requête.
+        for detail in self.saledetail_set.select_related('item'):
+            item = getattr(detail, 'item', None)
+            if not item:
+               continue
+            img_field = getattr(item, 'image', None)
+            if img_field and hasattr(img_field, 'url'):
+               images.append(img_field.url)
+        return images
+    @property
+    def total_quantity(self):
+        """
+        Retourne la quantité totale vendue (somme des SaleDetail.quantity) pour cette vente.
+        Utilisable directement dans les templates : {{ sale.total_quantity }}.
+        Si le queryset est annoté (voir view), la valeur annotée sera utilisée automatiquement.
+        """
+        # si la vente a été annotée (optimisation en view), utilise l'annotation
+        if hasattr(self, 'total_quantity') and self.__dict__.get('total_quantity') is not None:
+            # déjà annoté par le queryset -> renvoyer tel quel
+            return int(self.__dict__['total_quantity'] or 0)
+
+        # sinon, calculer via aggregate (sécurisé si utilisé isolément)
+        agg = self.saledetail_set.aggregate(total=Sum('quantity'))
+        return int(agg['total'] or 0)
 
 
 class SaleDetail(models.Model):

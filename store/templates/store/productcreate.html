@@ -72,6 +72,13 @@
                                 {{ form.vendor }}
                                 <div class="text-danger">{{ form.vendor.errors }}</div>
                             </div>
+                            <div>
+                                <label for="{{ form.image.id_for_label }}" class="form-label">
+                                    Product Image
+                                </label>
+                                {{ form.image }}
+                                <div class="text-danger">{{ form.image.errors }}</div>
+                            </div>
                         </div>
                         <div class="form-group text-center">
                             <button class="btn btn-success btn-lg" type="submit">
