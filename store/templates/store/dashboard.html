@@ -344,27 +344,26 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
-  /* ---------- Sales chart (existing logic) ---------- */
-  const datesEl = document.getElementById('sales-dates');
-  const valuesEl = document.getElementById('sales-values');
-  const placeholder = document.getElementById('sales-chart-placeholder');
-  const canvas = document.getElementById('salesChart');
-
+  /* ------------------ Helpers ------------------ */
   function safeParseJson(el) {
     if (!el) return [];
     try { return JSON.parse(el.textContent || '[]'); } catch (e) { console.error('JSON parse error', e); return []; }
   }
 
-  let salesDates = safeParseJson(datesEl);
-  let salesValues = safeParseJson(valuesEl);
+  function showPlaceholder(placeholder) {
+    if (placeholder) {
+      placeholder.style.display = 'flex';
+      placeholder.setAttribute('aria-hidden', 'false');
+    }
+  }
+  function hidePlaceholder(placeholder) {
+    if (placeholder) {
+      placeholder.style.display = 'none';
+      placeholder.setAttribute('aria-hidden', 'true');
+    }
+  }
 
-  if (!Array.isArray(salesDates)) salesDates = [];
-  if (!Array.isArray(salesValues)) salesValues = [];
-
-  if (salesDates.length === 0 || salesValues.length === 0 || salesValues.every(v => Number(v) === 0)) {
-    if (placeholder) placeholder.style.display = 'flex';
-  } else {
-    // create sales chart
+  function createChart(canvas, type, labels, datasets, optionsFactory) {
     const ctx = canvas.getContext('2d');
     if (canvas._chartInstance) { try { canvas._chartInstance.destroy(); } catch(e){} canvas._chartInstance = null; }
     const wrapper = canvas.closest('.chart-wrapper');
@@ -375,89 +374,157 @@ document.addEventListener('DOMContentLoaded', function () {
       canvas.style.width = rect.width + 'px';
       canvas.style.height = rect.height + 'px';
     }
-    canvas._chartInstance = new Chart(ctx, {
-      type: 'line',
+    const cfg = {
+      type: type,
       data: {
-        labels: salesDates,
-        datasets: [{
-          label: 'Revenue',
-          data: salesValues,
-          borderColor: 'rgba(75, 192, 192, 1)',
-          backgroundColor: 'rgba(75, 192, 192, 0.08)',
-          fill: true,
-          lineTension: 0.2,
-          pointRadius: 3
-        }]
+        labels: labels,
+        datasets: datasets
       },
-      options: {
+      options: optionsFactory()
+    };
+    canvas._chartInstance = new Chart(ctx, cfg);
+    return canvas._chartInstance;
+  }
+
+  function debounce(fn, wait) {
+    let t;
+    return function () { clearTimeout(t); t = setTimeout(fn, wait); };
+  }
+
+  /* ------------------ SALES : revenus par mois (histogramme) ------------------ */
+  (function () {
+    // currency depuis le contexte Django (échapper pour JS)
+    const currency = "{{ currency|default:'FCFA'|escapejs }}";
+
+    const datesEl = document.getElementById('sales-dates');
+    const valuesEl = document.getElementById('sales-values');
+    const placeholder = document.getElementById('sales-chart-placeholder');
+    const canvas = document.getElementById('salesChart');
+
+    let salesDates = safeParseJson(datesEl);
+    let salesValues = safeParseJson(valuesEl);
+    if (!Array.isArray(salesDates)) salesDates = [];
+    if (!Array.isArray(salesValues)) salesValues = [];
+
+    if (salesDates.length === 0 || salesValues.length === 0 || salesValues.every(v => Number(v) === 0)) {
+      showPlaceholder(placeholder);
+      return;
+    }
+    hidePlaceholder(placeholder);
+
+    const dataset = [{
+      label: `Revenue (${currency})`,
+      data: salesValues,
+      borderColor: 'rgba(75, 192, 192, 1)',
+      backgroundColor: 'rgba(75, 192, 192, 0.6)',
+      borderWidth: 1
+    }];
+
+    const chart = createChart(canvas, 'bar', salesDates, dataset, function () {
+      return {
         responsive: true,
         maintainAspectRatio: false,
         legend: { display: true },
         scales: {
-          yAxes: [{ ticks: { beginAtZero: true } }],
-          xAxes: [{ ticks: { autoSkip: true, maxTicksLimit: 12 }, gridLines: { display: false } }]
+          yAxes: [{
+            ticks: {
+              beginAtZero: true,
+              callback: function(value) {
+                if (typeof value === 'number') {
+                  return value.toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' ' + currency;
+                }
+                return value + ' ' + currency;
+              }
+            },
+            scaleLabel: { display: true, labelString: `Revenue (${currency})` }
+          }],
+          xAxes: [{
+            ticks: { autoSkip: true, maxTicksLimit: 12 },
+            gridLines: { display: false },
+            categoryPercentage: 0.8,
+            barPercentage: 0.9
+          }]
         },
-        tooltips: { mode: 'index', intersect: false }
-      }
+        tooltips: {
+          mode: 'index',
+          intersect: false,
+          callbacks: {
+            label: function(tooltipItem, data) {
+              const v = tooltipItem.yLabel;
+              const formatted = (typeof v === 'number')
+                ? v.toLocaleString(undefined, { maximumFractionDigits: 2 })
+                : v;
+              return `${data.datasets[tooltipItem.datasetIndex].label || 'Revenue'}: ${formatted} ${currency}`;
+            }
+          }
+        }
+      };
     });
-  }
 
-  /* ---------- Deliveries chart (new) ---------- */
-  const dMonthsEl = document.getElementById('delivery-months');
-  const dCountsEl = document.getElementById('delivery-counts');
-  const dPlaceholder = document.getElementById('deliveries-chart-placeholder');
-  const dCanvas = document.getElementById('deliveriesChart');
+    window.addEventListener('resize', debounce(function () {
+      if (chart && canvas) {
+        try { chart.resize(); } catch (e) { /* ignore */ }
+      }
+    }, 150));
+  })();
 
-  let deliveryMonths = safeParseJson(dMonthsEl);
-  let deliveryCounts = safeParseJson(dCountsEl);
+  /* ------------------ DELIVERIES : histogramme (par mois) ------------------ */
+  (function () {
+    const dMonthsEl = document.getElementById('delivery-months');
+    const dCountsEl = document.getElementById('delivery-counts');
+    const dPlaceholder = document.getElementById('deliveries-chart-placeholder');
+    const dCanvas = document.getElementById('deliveriesChart');
 
-  if (!Array.isArray(deliveryMonths)) deliveryMonths = [];
-  if (!Array.isArray(deliveryCounts)) deliveryCounts = [];
+    let deliveryMonths = safeParseJson(dMonthsEl);
+    let deliveryCounts = safeParseJson(dCountsEl);
+    if (!Array.isArray(deliveryMonths)) deliveryMonths = [];
+    if (!Array.isArray(deliveryCounts)) deliveryCounts = [];
 
-  if (deliveryMonths.length === 0 || deliveryCounts.length === 0 || deliveryCounts.every(v => Number(v) === 0)) {
-    if (dPlaceholder) dPlaceholder.style.display = 'flex';
-  } else {
-    const dctx = dCanvas.getContext('2d');
-    if (dCanvas._chartInstance) { try { dCanvas._chartInstance.destroy(); } catch(e){} dCanvas._chartInstance = null; }
-    const wrapper = dCanvas.closest('.chart-wrapper');
-    if (wrapper) {
-      const rect = wrapper.getBoundingClientRect();
-      dCanvas.width = Math.round(rect.width * (window.devicePixelRatio || 1));
-      dCanvas.height = Math.round(rect.height * (window.devicePixelRatio || 1));
-      dCanvas.style.width = rect.width + 'px';
-      dCanvas.style.height = rect.height + 'px';
+    if (deliveryMonths.length === 0 || deliveryCounts.length === 0 || deliveryCounts.every(v => Number(v) === 0)) {
+      showPlaceholder(dPlaceholder);
+      return;
     }
-    dCanvas._chartInstance = new Chart(dctx, {
-      type: 'bar',
-      data: {
-        labels: deliveryMonths,
-        datasets: [{
-          label: 'Deliveries',
-          data: deliveryCounts,
-          borderColor: 'rgba(54, 162, 235, 1)',
-          backgroundColor: 'rgba(54, 162, 235, 0.6)',
-          borderWidth: 1
-        }]
-      },
-      options: {
+    hidePlaceholder(dPlaceholder);
+
+    const dataset = [{
+      label: 'Deliveries',
+      data: deliveryCounts,
+      borderColor: 'rgba(54, 162, 235, 1)',
+      backgroundColor: 'rgba(54, 162, 235, 0.6)',
+      borderWidth: 1
+    }];
+
+    const dchart = createChart(dCanvas, 'bar', deliveryMonths, dataset, function () {
+      return {
         responsive: true,
         maintainAspectRatio: false,
         legend: { display: false },
         scales: {
           yAxes: [{ ticks: { beginAtZero: true } }],
-          xAxes: [{ ticks: { autoSkip: true, maxTicksLimit: 12 }, gridLines: { display: false } }]
+          xAxes: [{
+            ticks: { autoSkip: true, maxTicksLimit: 12 },
+            gridLines: { display: false },
+            categoryPercentage: 0.8,
+            barPercentage: 0.9
+          }]
         },
         tooltips: { mode: 'index', intersect: false }
-      }
+      };
     });
-  }
 
-  /* ---------- Small: render top items if needed (client side fallback) ---------- */
+    window.addEventListener('resize', debounce(function () {
+      if (dchart && dCanvas) {
+        try { dchart.resize(); } catch (e) { /* ignore */ }
+      }
+    }, 150));
+  })();
+
+  /* ------------------ Top items (client fallback) ------------------ */
   try {
     const topItemsEl = document.getElementById('top-items');
     if (topItemsEl) {
       const topItems = JSON.parse(topItemsEl.textContent || '[]');
-      // top items are already rendered server-side; this is only a fallback place-holder for possible client updates
+      // Le rendu serveur affiche déjà la liste. Ce point JS est un fallback si tu veux mettre à jour dynamiquement.
       // console.log('Top items (JS):', topItems);
     }
   } catch (e) { /* ignore */ }

@@ -15,6 +15,9 @@ import operator
 from functools import reduce
 from django.templatetags.static import static
 
+from typing import Any, Dict, List
+from decimal import Decimal
+from django.http import HttpRequest, HttpResponse
 
 
 # Django core imports
@@ -50,6 +53,8 @@ from .forms import ItemForm, CategoryForm, DeliveryForm
 from .tables import ItemTable
 from django.conf import settings
 from django.views.decorators.http import require_http_methods
+from django.db.models.functions import TruncMonth, Coalesce
+
 
 
 # Si SaleDetail est défini dans transactions.models, on l'importe pour récupérer top items
@@ -62,63 +67,68 @@ except Exception:
 
 
 @login_required
-def dashboard(request):
+def dashboard(request: HttpRequest) -> HttpResponse:
     """
-    Dashboard adapté au modèle Delivery fourni :
-    - utilise Delivery.date comme champ date
-    - utilise Delivery.is_delivered pour les statuts (Delivered / Pending)
-    - normalise recent_deliveries en dicts simples pour le template
+    Dashboard optimisé :
+    - réduit les requêtes en utilisant `aggregate` / `annotate` avec `filter` lorsque possible
+    - normalise recent_deliveries en dicts simples
+    - conversions sûres de Decimal -> float pour templates/JS
     """
-    # Sales aggregates
+    # ---- Sales aggregates ----
     total_sales = Sale.objects.count()
-    total_revenue = Sale.objects.aggregate(total=Sum('grand_total'))['total'] or 0
-    total_revenue = float(total_revenue)
+    total_revenue = Sale.objects.aggregate(total=Coalesce(Sum('grand_total'), Decimal('0')))['total']
+    # convert Decimal -> float (utile pour JSON/chart libs). Garde prudence si tu veux précision financière.
+    total_revenue = float(total_revenue) if isinstance(total_revenue, Decimal) else total_revenue
 
-    # Items / stock
+    # ---- Items / stock ----
     total_products = Item.objects.count()
     low_stock_threshold = getattr(settings, 'LOW_STOCK_THRESHOLD', 5)
     low_stock_products = Item.objects.filter(quantity__lte=low_stock_threshold)
     low_stock_count = low_stock_products.count()
 
-    # Deliveries aggregates (model has: customer_name, phone_number, location, date, is_delivered)
+    # ---- Deliveries aggregates (single DB hit pour les statuts) ----
     deliveries_total = Delivery.objects.count()
-
-    # deliveries_by_status using is_delivered boolean
-    delivered_count = Delivery.objects.filter(is_delivered=True).count()
-    pending_count = Delivery.objects.filter(is_delivered=False).count()
+    deliveries_status_agg = Delivery.objects.aggregate(
+        delivered=Count('pk', filter=Q(is_delivered=True)),
+        pending=Count('pk', filter=Q(is_delivered=False))
+    )
     deliveries_by_status = {
-        'Delivered': delivered_count,
-        'Pending': pending_count
+        'Delivered': deliveries_status_agg.get('delivered', 0) or 0,
+        'Pending': deliveries_status_agg.get('pending', 0) or 0,
     }
 
-    # Recent deliveries ordered by date (most recent first)
-    recent_deliveries_qs = Delivery.objects.order_by('-date')[:10]
+    # ---- Recent deliveries (sélection avec values() pour éviter chargement d'objets complets) ----
+    recent_deliveries_qs = Delivery.objects.order_by('-date').values(
+        'id', 'customer_name', 'phone_number', 'date', 'is_delivered', 'location'
+    )[:10]
 
-    # Normalize recent deliveries to simple dicts for template
-    recent_deliveries = []
+    recent_deliveries: List[Dict[str, Any]] = []
     for d in recent_deliveries_qs:
+        # customer_label : priorise customer_name, puis phone, sinon fallback
+        customer_label = d.get('customer_name') or (d.get('phone_number') and str(d.get('phone_number'))) or f"Delivery #{d['id']}"
         recent_deliveries.append({
-            'id': d.id,
-            'customer_label': d.customer_name or (d.phone_number and str(d.phone_number)) or f'Delivery #{d.id}',
-            'date': d.date,
-            'status_label': 'Delivered' if d.is_delivered else 'Pending',
-            'location': d.location or '',
-            'phone_number': str(d.phone_number) if getattr(d, 'phone_number', None) else ''
+            'id': d['id'],
+            'customer_label': customer_label,
+            'date': d.get('date'),
+            'status_label': 'Delivered' if d.get('is_delivered') else 'Pending',
+            'location': d.get('location') or '',
+            'phone_number': str(d.get('phone_number')) if d.get('phone_number') else ''
         })
 
-    # Sales by month
-    sales_by_month = (
+    # ---- Sales by month (liste prête pour les graphiques) ----
+    sales_by_month_qs = (
         Sale.objects
         .annotate(month=TruncMonth('date_added'))
         .values('month')
-        .annotate(revenue=Sum('grand_total'), count=Count('id'))
+        .annotate(revenue=Coalesce(Sum('grand_total'), Decimal('0')), count=Count('id'))
         .order_by('month')
     )
-    sales_dates = [entry['month'].strftime('%Y-%m') for entry in sales_by_month]
-    sales_values = [float(entry['revenue'] or 0) for entry in sales_by_month]
-    sales_counts = [int(entry['count']) for entry in sales_by_month]
 
-    # Deliveries by month (use Delivery.date)
+    sales_dates = [entry['month'].strftime('%Y-%m') for entry in sales_by_month_qs]
+    sales_values = [float(entry['revenue']) for entry in sales_by_month_qs]
+    sales_counts = [int(entry['count']) for entry in sales_by_month_qs]
+
+    # ---- Deliveries by month ----
     deliveries_by_month_qs = (
         Delivery.objects
         .annotate(month=TruncMonth('date'))
@@ -129,18 +139,28 @@ def dashboard(request):
     delivery_months = [entry['month'].strftime('%Y-%m') for entry in deliveries_by_month_qs]
     delivery_counts = [int(entry['count']) for entry in deliveries_by_month_qs]
 
-    # Recent sales & top items (if SaleDetail exists)
-    recent_sales = Sale.objects.order_by('-date_added')[:10]
+    # ---- Recent sales & top items ----
+    recent_sales = Sale.objects.order_by('-date_added')[:10]  # si tu veux sérialiser, utilise .values(...)
+
     top_items = []
-    if SaleDetail is not None:
+    # Vérifier si SaleDetail existe (sécurité si modèle optionnel)
+    try:
+        # simple aggregation pour les top items
         top_qs = (
             SaleDetail.objects
             .values('item__id', 'item__name')
-            .annotate(total_qty=Sum('quantity'))
+            .annotate(total_qty=Coalesce(Sum('quantity'), 0))
             .order_by('-total_qty')[:10]
         )
-        top_items = [{'id': e['item__id'], 'name': e['item__name'], 'qty': e['total_qty']} for e in top_qs]
+        top_items = [
+            {'id': e['item__id'], 'name': e['item__name'], 'qty': int(e['total_qty'])}
+            for e in top_qs
+        ]
+    except NameError:
+        # SaleDetail non défini : on ignore proprement
+        top_items = []
 
+    # ---- Profiles (staff users) ----
     profiles_count = get_user_model().objects.filter(is_staff=True).count()
 
     context = {
