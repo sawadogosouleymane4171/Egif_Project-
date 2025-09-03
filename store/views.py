@@ -1,92 +1,124 @@
 """
 Module: store.views
 
-Contains Django views for managing items, profiles,
-and deliveries in the store application.
-
-Classes handle product listing, creation, updating,
-deletion, and delivery management.
-The module integrates with Django's authentication
-and querying functionalities.
+Django views for the store app.
+- Dashboard shows revenue based on paid_amount when available.
+- Recent sales are serialized to expose paid_amount/balance safely.
 """
 
-# Standard library imports
 import operator
 from functools import reduce
-from django.templatetags.static import static
-
 from typing import Any, Dict, List
 from decimal import Decimal
-from django.http import HttpRequest, HttpResponse
 
-
-# Django core imports
+from django.templatetags.static import static
+from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.urls import reverse, reverse_lazy
-from django.http import JsonResponse
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_http_methods
 from django.views.decorators.csrf import csrf_exempt
-from django.db.models import Q, Count, Sum
-from django.db.models.functions import TruncMonth
+from django.db.models import Q, Count, Sum, F
+from django.db.models.functions import TruncMonth, Coalesce
 from django.contrib.auth import get_user_model
 
-# Authentication and permissions
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 
-# Class-based views
-from django.views.generic import (
-    DetailView, CreateView, UpdateView, DeleteView, ListView
-)
+from django.views.generic import DetailView, CreateView, UpdateView, DeleteView, ListView
 from django.views.generic.edit import FormMixin
 
-# Third-party packages
 from django_tables2 import SingleTableView
 import django_tables2 as tables
 from django_tables2.export.views import ExportMixin
 
-# Local app imports
 from accounts.models import Profile, Vendor
 from transactions.models import Sale
 from .models import Category, Item, Delivery
 from .forms import ItemForm, CategoryForm, DeliveryForm
 from .tables import ItemTable
 from django.conf import settings
-from django.views.decorators.http import require_http_methods
-from django.db.models.functions import TruncMonth, Coalesce
 
-
-
-# Si SaleDetail est défini dans transactions.models, on l'importe pour récupérer top items
+# Optional import for top-items aggregation
 try:
-    from transactions.models import Sale, SaleDetail
+    from transactions.models import SaleDetail
 except Exception:
-    # Si SaleDetail n'existe pas, on importe au moins Sale pour le dashboard
-    from transactions.models import Sale
     SaleDetail = None
 
 
 @login_required
 def dashboard(request: HttpRequest) -> HttpResponse:
     """
-    Dashboard optimisé :
-    - réduit les requêtes en utilisant `aggregate` / `annotate` avec `filter` lorsque possible
-    - normalise recent_deliveries en dicts simples
-    - conversions sûres de Decimal -> float pour templates/JS
+    Dashboard:
+    - Detects real payment field (amount_paid or paid_amount)
+    - total_revenue aggregates on that field when available (true encaissements)
+    - recent_sales serialized with paid_amount & balance_due for template compatibility
     """
-    # ---- Sales aggregates ----
-    total_sales = Sale.objects.count()
-    total_revenue = Sale.objects.aggregate(total=Coalesce(Sum('grand_total'), Decimal('0')))['total']
-    # convert Decimal -> float (utile pour JSON/chart libs). Garde prudence si tu veux précision financière.
-    total_revenue = float(total_revenue) if isinstance(total_revenue, Decimal) else total_revenue
+    # ---- Detect Sale fields ----
+    try:
+        sale_field_names = [f.name for f in Sale._meta.get_fields()]
+    except Exception:
+        sale_field_names = []
 
-    # ---- Items / stock ----
+    # determine the payment field present on Sale
+    payment_field = None
+    if 'amount_paid' in sale_field_names:
+        payment_field = 'amount_paid'
+    elif 'paid_amount' in sale_field_names:
+        payment_field = 'paid_amount'
+    else:
+        payment_field = None  # no explicit payment field
+
+    # Build 'paid_sales_qs' using common conventions (sales considered "paid")
+    if 'is_paid' in sale_field_names:
+        paid_sales_qs = Sale.objects.filter(is_paid=True)
+    elif 'is_fully_paid' in sale_field_names:
+        paid_sales_qs = Sale.objects.filter(is_fully_paid=True)
+    elif 'payment_status' in sale_field_names:
+        paid_sales_qs = Sale.objects.filter(payment_status__in=['paid', 'PAID', 'completed', 'COMPLETED'])
+    elif payment_field and 'grand_total' in sale_field_names:
+        # consider sale "paid" if paid_amount/amount_paid >= grand_total
+        paid_sales_qs = Sale.objects.filter(**{f"{payment_field}__gte": F('grand_total')})
+    elif 'balance_due' in sale_field_names:
+        paid_sales_qs = Sale.objects.filter(balance_due__lte=0)
+    else:
+        paid_sales_qs = Sale.objects.all()
+
+    # ---- TOTAL REVENUE and monthly series ----
+    # If a payment_field exists, aggregate on it (true revenue/encaissé).
+    if payment_field:
+        # Sum of the actual payment field across all sales (includes partial payments)
+        total_revenue_val = Sale.objects.aggregate(total=Coalesce(Sum(payment_field), Decimal('0')))['total']
+
+        # monthly series aggregated on the payment_field
+        sales_by_month_qs = (
+            Sale.objects
+            .annotate(month=TruncMonth('date_added'))
+            .values('month')
+            .annotate(revenue=Coalesce(Sum(payment_field), Decimal('0')), count=Count('id'))
+            .order_by('month')
+        )
+    else:
+        # fallback: sum of grand_total but only on sales considered "paid"
+        total_revenue_val = paid_sales_qs.aggregate(total=Coalesce(Sum('grand_total'), Decimal('0')))['total']
+        sales_by_month_qs = (
+            paid_sales_qs
+            .annotate(month=TruncMonth('date_added'))
+            .values('month')
+            .annotate(revenue=Coalesce(Sum('grand_total'), Decimal('0')), count=Count('id'))
+            .order_by('month')
+        )
+
+    total_revenue = float(total_revenue_val) if isinstance(total_revenue_val, Decimal) else total_revenue_val
+
+    # ---- Basic counts / stock ----
+    total_sales = Sale.objects.count()
+    paid_sales_count = paid_sales_qs.count()
     total_products = Item.objects.count()
     low_stock_threshold = getattr(settings, 'LOW_STOCK_THRESHOLD', 5)
     low_stock_products = Item.objects.filter(quantity__lte=low_stock_threshold)
     low_stock_count = low_stock_products.count()
 
-    # ---- Deliveries aggregates (single DB hit pour les statuts) ----
+    # ---- Deliveries aggregates ----
     deliveries_total = Delivery.objects.count()
     deliveries_status_agg = Delivery.objects.aggregate(
         delivered=Count('pk', filter=Q(is_delivered=True)),
@@ -97,14 +129,13 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         'Pending': deliveries_status_agg.get('pending', 0) or 0,
     }
 
-    # ---- Recent deliveries (sélection avec values() pour éviter chargement d'objets complets) ----
+    # ---- Recent deliveries serialized ----
     recent_deliveries_qs = Delivery.objects.order_by('-date').values(
         'id', 'customer_name', 'phone_number', 'date', 'is_delivered', 'location'
     )[:10]
 
     recent_deliveries: List[Dict[str, Any]] = []
     for d in recent_deliveries_qs:
-        # customer_label : priorise customer_name, puis phone, sinon fallback
         customer_label = d.get('customer_name') or (d.get('phone_number') and str(d.get('phone_number'))) or f"Delivery #{d['id']}"
         recent_deliveries.append({
             'id': d['id'],
@@ -115,20 +146,12 @@ def dashboard(request: HttpRequest) -> HttpResponse:
             'phone_number': str(d.get('phone_number')) if d.get('phone_number') else ''
         })
 
-    # ---- Sales by month (liste prête pour les graphiques) ----
-    sales_by_month_qs = (
-        Sale.objects
-        .annotate(month=TruncMonth('date_added'))
-        .values('month')
-        .annotate(revenue=Coalesce(Sum('grand_total'), Decimal('0')), count=Count('id'))
-        .order_by('month')
-    )
-
+    # ---- Sales by month series -> lists for JS charts ----
     sales_dates = [entry['month'].strftime('%Y-%m') for entry in sales_by_month_qs]
     sales_values = [float(entry['revenue']) for entry in sales_by_month_qs]
     sales_counts = [int(entry['count']) for entry in sales_by_month_qs]
 
-    # ---- Deliveries by month ----
+    # ---- Deliveries by month series ----
     deliveries_by_month_qs = (
         Delivery.objects
         .annotate(month=TruncMonth('date'))
@@ -139,34 +162,83 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     delivery_months = [entry['month'].strftime('%Y-%m') for entry in deliveries_by_month_qs]
     delivery_counts = [int(entry['count']) for entry in deliveries_by_month_qs]
 
-    # ---- Recent sales & top items ----
-    recent_sales = Sale.objects.order_by('-date_added')[:10]  # si tu veux sérialiser, utilise .values(...)
+    # ---- Recent sales: serialize with unified keys (paid_amount & balance_due) for template compatibility ----
+    # build list of value keys to request from DB
+    values_keys = ['id', 'date_added', 'grand_total', 'customer__id', 'customer__first_name', 'customer__last_name', 'customer__phone']
+    if payment_field:
+        values_keys.append(payment_field)
+    # fetch recent sales (from paid_sales_qs to keep "recent sales" = paid sales)
+    recent_qs = paid_sales_qs.order_by('-date_added')[:10]
+    recent_sales_raw = list(recent_qs.values(*values_keys))
 
+    recent_sales: List[Dict[str, Any]] = []
+    for s in recent_sales_raw:
+        # normalize paid_amount key for template (even if actual field is amount_paid)
+        paid_val = None
+        if payment_field:
+            paid_val = s.get(payment_field) or Decimal('0')
+        # ensure numeric float for template
+        try:
+            paid_val_num = float(paid_val) if paid_val is not None else 0.0
+        except Exception:
+            paid_val_num = 0.0
+
+        # compute balance_due if possible (grand_total - paid)
+        balance_val_num = None
+        try:
+            gt = s.get('grand_total') or Decimal('0')
+            gt_num = float(gt) if isinstance(gt, Decimal) else (float(gt) if gt is not None else 0.0)
+            balance_val_num = gt_num - paid_val_num
+        except Exception:
+            balance_val_num = None
+
+        # customer label
+        cust_name = None
+        if s.get('customer__first_name') or s.get('customer__last_name'):
+            cust_name = f"{(s.get('customer__first_name') or '').strip()} {(s.get('customer__last_name') or '').strip()}".strip()
+        customer_label = cust_name or (s.get('customer__phone') and str(s.get('customer__phone'))) or f"Sale #{s.get('id')}"
+
+        recent_sales.append({
+            'id': s.get('id'),
+            'date_added': s.get('date_added'),
+            # keep original grand_total for reference
+            'grand_total': float(s.get('grand_total')) if isinstance(s.get('grand_total'), Decimal) else (float(s.get('grand_total')) if s.get('grand_total') is not None else 0.0),
+            # normalized keys expected by template
+            'paid_amount': paid_val_num,
+            'balance_due': balance_val_num,
+            'customer__phone': s.get('customer__phone'),
+            'customer_label': customer_label
+        })
+
+    # ---- Top items based on SaleDetail when available (and preferring paid sales) ----
     top_items = []
-    # Vérifier si SaleDetail existe (sécurité si modèle optionnel)
     try:
-        # simple aggregation pour les top items
-        top_qs = (
-            SaleDetail.objects
-            .values('item__id', 'item__name')
-            .annotate(total_qty=Coalesce(Sum('quantity'), 0))
-            .order_by('-total_qty')[:10]
-        )
-        top_items = [
-            {'id': e['item__id'], 'name': e['item__name'], 'qty': int(e['total_qty'])}
-            for e in top_qs
-        ]
-    except NameError:
-        # SaleDetail non défini : on ignore proprement
+        if SaleDetail is not None:
+            qs = SaleDetail.objects.all()
+            # If SaleDetail has FK 'sale', limit to paid sales
+            if 'sale' in [f.name for f in SaleDetail._meta.get_fields()]:
+                qs = qs.filter(sale__in=paid_sales_qs)
+            top_qs = (
+                qs
+                .values('item__id', 'item__name')
+                .annotate(total_qty=Coalesce(Sum('quantity'), 0))
+                .order_by('-total_qty')[:10]
+            )
+            top_items = [
+                {'id': e['item__id'], 'name': e['item__name'], 'qty': int(e['total_qty'])}
+                for e in top_qs
+            ]
+    except Exception:
         top_items = []
 
-    # ---- Profiles (staff users) ----
+    # ---- Profiles count ----
     profiles_count = get_user_model().objects.filter(is_staff=True).count()
 
     context = {
         'total_sales': total_sales,
+        'paid_sales_count': paid_sales_count,
         'sales_count': total_sales,
-        'total_revenue': total_revenue,
+        'total_revenue': total_revenue,  # revenue based on amount_paid/paid_amount when possible
         'total_products': total_products,
         'total_items': total_products,
         'profiles_count': profiles_count,
@@ -188,25 +260,27 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     }
     return render(request, 'store/dashboard.html', context)
 
-@require_http_methods(["GET", "POST"])
 
+@require_http_methods(["GET", "POST"])
 def get_items_ajax_view(request):
     """
-    Retourne JSON pour Select2. Accepte GET et POST.
-    Renvoie toujours {'results': [...] } ou [] en cas d'erreur.
+    Robust get-items for Select2 / autocomplete.
+    Accepts GET (term param) or POST.
+    Returns {'results': [...]} or error message.
     """
     try:
         term = request.GET.get('term', '').strip() if request.method == 'GET' else request.POST.get('term', '').strip()
-
         qs = Item.objects.all()
         if term:
-            qs = qs.filter(Q(name__icontains=term) |
-                           Q(description__icontains=term) if hasattr(Item, 'description') else Q(name__icontains=term))
-        qs = qs[:20]
+            # If Item has description field, include it; otherwise search name only
+            if hasattr(Item, 'description'):
+                qs = qs.filter(Q(name__icontains=term) | Q(description__icontains=term))
+            else:
+                qs = qs.filter(name__icontains=term)
 
+        qs = qs[:20]
         data = []
         for item in qs:
-            # safe image URL
             image_url = ''
             try:
                 if getattr(item, 'image', None) and hasattr(item.image, 'url'):
@@ -226,23 +300,17 @@ def get_items_ajax_view(request):
             })
 
         return JsonResponse({'results': data}, safe=False)
-
     except Exception as e:
-        # renvoyer un message d'erreur lisible pour debugging
         return JsonResponse({'results': [], 'error': str(e)}, status=500)
 
+
+# --- class-based views unchanged (kept as before) ---
+# ... (rest of CBVs unchanged, omitted for brevity in this snippet)
+# If you want the full file with CBVs included, use the previous full file you had and replace only the dashboard + get_items_ajax_view parts.
+
+
+# --- Class-based views (unchanged) ---
 class ProductListView(LoginRequiredMixin, ExportMixin, tables.SingleTableView):
-    """
-    View class to display a list of products.
-
-    Attributes:
-    - model: The model associated with the view.
-    - table_class: The table class used for rendering.
-    - template_name: The HTML template used for rendering the view.
-    - context_object_name: The variable name for the context object.
-    - paginate_by: Number of items per page for pagination.
-    """
-
     model = Item
     table_class = ItemTable
     template_name = "store/productslist.html"
@@ -252,38 +320,20 @@ class ProductListView(LoginRequiredMixin, ExportMixin, tables.SingleTableView):
 
 
 class ItemSearchListView(ProductListView):
-    """
-    View class to search and display a filtered list of items.
-
-    Attributes:
-    - paginate_by: Number of items per page for pagination.
-    """
-
     paginate_by = 10
 
     def get_queryset(self):
         result = super(ItemSearchListView, self).get_queryset()
-
         query = self.request.GET.get("q")
         if query:
             query_list = query.split()
             result = result.filter(
-                reduce(
-                    operator.and_, (Q(name__icontains=q) for q in query_list)
-                )
+                reduce(operator.and_, (Q(name__icontains=q) for q in query_list))
             )
         return result
 
 
 class ProductDetailView(LoginRequiredMixin, DetailView):
-    """
-    View class to display detailed information about a product.
-
-    Attributes:
-    - model: The model associated with the view.
-    - template_name: The HTML template used for rendering the view.
-    """
-
     model = Item
     template_name = "store/productdetail.html"
 
@@ -292,86 +342,37 @@ class ProductDetailView(LoginRequiredMixin, DetailView):
 
 
 class ProductCreateView(LoginRequiredMixin, CreateView):
-    """
-    View class to create a new product.
-
-    Attributes:
-    - model: The model associated with the view.
-    - template_name: The HTML template used for rendering the view.
-    - form_class: The form class used for data input.
-    - success_url: The URL to redirect to upon successful form submission.
-    """
-
     model = Item
     template_name = "store/productcreate.html"
     form_class = ItemForm
     success_url = "/products"
 
     def test_func(self):
-        # item = Item.objects.get(id=pk)
         if self.request.POST.get("quantity") < 1:
             return False
-        else:
-            return True
+        return True
 
 
 class ProductUpdateView(LoginRequiredMixin, UserPassesTestMixin, UpdateView):
-    """
-    View class to update product information.
-
-    Attributes:
-    - model: The model associated with the view.
-    - template_name: The HTML template used for rendering the view.
-    - fields: The fields to be updated.
-    - success_url: The URL to redirect to upon successful form submission.
-    """
-
     model = Item
     template_name = "store/productupdate.html"
     form_class = ItemForm
     success_url = "/products"
 
     def test_func(self):
-        if self.request.user.is_superuser:
-            return True
-        else:
-            return False
+        return self.request.user.is_superuser
 
 
 class ProductDeleteView(LoginRequiredMixin, UserPassesTestMixin, DeleteView):
-    """
-    View class to delete a product.
-
-    Attributes:
-    - model: The model associated with the view.
-    - template_name: The HTML template used for rendering the view.
-    - success_url: The URL to redirect to upon successful deletion.
-    """
-
     model = Item
     template_name = "store/productdelete.html"
     success_url = "/products"
 
     def test_func(self):
-        if self.request.user.is_superuser:
-            return True
-        else:
-            return False
+        return self.request.user.is_superuser
 
 
-class DeliveryListView(
-    LoginRequiredMixin, ExportMixin, tables.SingleTableView
-):
-    """
-    View class to display a list of deliveries.
-
-    Attributes:
-    - model: The model associated with the view.
-    - pagination: Number of items per page for pagination.
-    - template_name: The HTML template used for rendering the view.
-    - context_object_name: The variable name for the context object.
-    """
-
+class DeliveryListView(LoginRequiredMixin, ExportMixin, tables.SingleTableView):
     model = Delivery
     pagination = 10
     template_name = "store/deliveries.html"
@@ -379,54 +380,25 @@ class DeliveryListView(
 
 
 class DeliverySearchListView(DeliveryListView):
-    """
-    View class to search and display a filtered list of deliveries.
-
-    Attributes:
-    - paginate_by: Number of items per page for pagination.
-    """
-
     paginate_by = 10
 
     def get_queryset(self):
         result = super(DeliverySearchListView, self).get_queryset()
-
         query = self.request.GET.get("q")
         if query:
             query_list = query.split()
             result = result.filter(
-                reduce(
-                    operator.
-                    and_, (Q(customer_name__icontains=q) for q in query_list)
-                )
+                reduce(operator.and_, (Q(customer_name__icontains=q) for q in query_list))
             )
         return result
 
 
 class DeliveryDetailView(LoginRequiredMixin, DetailView):
-    """
-    View class to display detailed information about a delivery.
-
-    Attributes:
-    - model: The model associated with the view.
-    - template_name: The HTML template used for rendering the view.
-    """
-
     model = Delivery
     template_name = "store/deliverydetail.html"
 
 
 class DeliveryCreateView(LoginRequiredMixin, CreateView):
-    """
-    View class to create a new delivery.
-
-    Attributes:
-    - model: The model associated with the view.
-    - fields: The fields to be included in the form.
-    - template_name: The HTML template used for rendering the view.
-    - success_url: The URL to redirect to upon successful form submission.
-    """
-
     model = Delivery
     form_class = DeliveryForm
     template_name = "store/delivery_form.html"
@@ -434,16 +406,6 @@ class DeliveryCreateView(LoginRequiredMixin, CreateView):
 
 
 class DeliveryUpdateView(LoginRequiredMixin, UpdateView):
-    """
-    View class to update delivery information.
-
-    Attributes:
-    - model: The model associated with the view.
-    - fields: The fields to be updated.
-    - template_name: The HTML template used for rendering the view.
-    - success_url: The URL to redirect to upon successful form submission.
-    """
-
     model = Delivery
     form_class = DeliveryForm
     template_name = "store/delivery_form.html"
@@ -451,24 +413,12 @@ class DeliveryUpdateView(LoginRequiredMixin, UpdateView):
 
 
 class DeliveryDeleteView(LoginRequiredMixin, UserPassesTestMixin, DeleteView):
-    """
-    View class to delete a delivery.
-
-    Attributes:
-    - model: The model associated with the view.
-    - template_name: The HTML template used for rendering the view.
-    - success_url: The URL to redirect to upon successful deletion.
-    """
-
     model = Delivery
     template_name = "store/productdelete.html"
     success_url = "/deliveries"
 
     def test_func(self):
-        if self.request.user.is_superuser:
-            return True
-        else:
-            return False
+        return self.request.user.is_superuser
 
 
 class CategoryListView(LoginRequiredMixin, ListView):
@@ -516,36 +466,3 @@ class CategoryDeleteView(LoginRequiredMixin, DeleteView):
 
 def is_ajax(request):
     return request.META.get('HTTP_X_REQUESTED_WITH') == 'XMLHttpRequest'
-
-
-@csrf_exempt
-@require_POST
-@login_required
-def get_items_ajax_view(request):
-    if is_ajax(request):
-        try:
-            term = request.POST.get("term", "")
-            data = []
-
-            items = Item.objects.filter(name__icontains=term)
-            for item in items[:10]:
-                data.append(item.to_json())
-
-            return JsonResponse(data, safe=False)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    return JsonResponse({'error': 'Not an AJAX request'}, status=400)
-def get_items_ajax_view(request):
-    if is_ajax(request):
-        try:
-            term = request.POST.get("term", "")
-            data = []
-
-            items = Item.objects.filter(name__icontains=term)
-            for item in items[:10]:
-                data.append(item.to_json())
-
-            return JsonResponse(data, safe=False)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    return JsonResponse({'error': 'Not an AJAX request'}, status=400)
