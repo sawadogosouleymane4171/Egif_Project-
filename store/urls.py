@@ -22,7 +22,8 @@ from .views import (
     CategoryDetailView,
     CategoryCreateView,
     CategoryUpdateView,
-    CategoryDeleteView
+    CategoryDeleteView,
+    delete_item_ajax
 )
 
 # URL patterns
@@ -124,6 +125,7 @@ urlpatterns = [
         CategoryDeleteView.as_view(),
         name='category-delete'
     ),
+    path('items/delete-ajax/', views.delete_item_ajax, name='delete-item-ajax'),
 ]
 
 # Static media files configuration for development

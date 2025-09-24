@@ -30,6 +30,7 @@
         <thead class="thead-light">
             <tr>
                 <th scope="col">ID <i class="fa-solid fa-sort"></i></th>
+                <th scope="col">Image</th>
                 <th scope="col">Name <i class="fa-solid fa-sort"></i></th>
                 <th scope="col">Quantity <i class="fa-solid fa-sort"></i></th>
                 <th scope="col">Price <i class="fa-solid fa-sort"></i></th>
@@ -43,6 +44,13 @@
             {% for purchase in purchases %}
             <tr>
                 <th scope="row">{{ purchase.id }}</th>
+                <td>
+                    {% if purchase.item_image_url %}
+                        <img src="{{ purchase.item_image_url }}" alt="Photo produit" style="max-width:50px;max-height:50px;">
+                    {% else %}
+                        <span class="text-muted">-</span>
+                    {% endif %}
+                </td>
                 <td>{{ purchase.item.name }}</td>
                 <td>{{ purchase.quantity }}</td>
                 <td>{{ purchase.total_value }}</td>

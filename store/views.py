@@ -1,24 +1,35 @@
 """
 Module: store.views
 
-Django views for the store app.
-- Dashboard shows revenue based on paid_amount when available.
-- Recent sales are serialized to expose paid_amount/balance safely.
+Vue mise à jour du dashboard pour inclure le coût total d'inventaire
+et une endpoint AJAX pour supprimer un item et renvoyer le nouveau coût.
+
+Contenu:
+- dashboard(request): calcul du total_revenue (logique existante) + total_inventory_cost
+- get_items_ajax_view(request): autocomplete Select2 (renvoie {'results': [...]})
+- delete_item_ajax(request): suppression sécurisée d'un Item et recalcul du coût
+- util: compute_total_inventory_cost() pour centraliser la logique
+
+Remarque: n'oublie pas d'ajouter l'URL pour delete_item_ajax dans urls.py, et
+côté template dashboard.html, placer un élément avec id "total_inventory_cost"
+pour que le JS puisse mettre à jour la valeur après suppression.
 """
 
 import operator
 from functools import reduce
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from decimal import Decimal
 
 from django.templatetags.static import static
 from django.http import HttpRequest, HttpResponse, JsonResponse
-from django.shortcuts import render
+from django.shortcuts import render, get_object_or_404
 from django.urls import reverse, reverse_lazy
 from django.views.decorators.http import require_POST, require_http_methods
 from django.views.decorators.csrf import csrf_exempt
-from django.db.models import Q, Count, Sum, F
+from django.db import transaction
+from django.db.models import Q, Count, Sum, F, ExpressionWrapper
 from django.db.models.functions import TruncMonth, Coalesce
+from django.db.models import DecimalField
 from django.contrib.auth import get_user_model
 
 from django.contrib.auth.decorators import login_required
@@ -32,7 +43,7 @@ import django_tables2 as tables
 from django_tables2.export.views import ExportMixin
 
 from accounts.models import Profile, Vendor
-from transactions.models import Sale
+from transactions.models import Sale, Purchase  # Ajout pour accès aux achats
 from .models import Category, Item, Delivery
 from .forms import ItemForm, CategoryForm, DeliveryForm
 from .tables import ItemTable
@@ -45,6 +56,55 @@ except Exception:
     SaleDetail = None
 
 
+# -------------------- Utilities --------------------
+def compute_total_inventory_cost() -> Decimal:
+    """Compute the total inventory cost as SUM(quantity * unit_cost)
+
+    The function tries to detect a sensible "cost" field on Item using a
+    list of common field names. If none is found it falls back to 'price'.
+    Returns a Decimal (0 if not computable).
+    """
+    cost_field_candidates = ['cost_price', 'purchase_price', 'cost', 'unit_cost', 'buy_price', 'purchase_cost']
+    try:
+        item_field_names = [f.name for f in Item._meta.get_fields()]
+    except Exception:
+        item_field_names = []
+
+    chosen_field: Optional[str] = None
+    for cand in cost_field_candidates:
+        if cand in item_field_names:
+            chosen_field = cand
+            break
+
+    if not chosen_field and 'price' in item_field_names:
+        chosen_field = 'price'
+
+    if not chosen_field:
+        return Decimal('0')
+
+    # Build expression: quantity * chosen_field
+    expr = ExpressionWrapper(
+        F('quantity') * F(chosen_field),
+        output_field=DecimalField(max_digits=20, decimal_places=2)
+    )
+
+    total_val = Item.objects.aggregate(total=Coalesce(Sum(expr), Decimal('0')))['total'] or Decimal('0')
+    return total_val
+
+
+def compute_total_purchase_cost() -> Decimal:
+    """
+    Calcule le coût total d'achat de tous les produits (somme des achats).
+    """
+    try:
+        total = Purchase.objects.aggregate(total=Coalesce(Sum('total_value'), Decimal('0')))['total']
+        return total or Decimal('0')
+    except Exception:
+        return Decimal('0')
+
+
+# -------------------- Views --------------------
+
 @login_required
 def dashboard(request: HttpRequest) -> HttpResponse:
     """
@@ -52,6 +112,7 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     - Detects real payment field (amount_paid or paid_amount)
     - total_revenue aggregates on that field when available (true encaissements)
     - recent_sales serialized with paid_amount & balance_due for template compatibility
+    - compute total inventory cost and expose it to the template
     """
     # ---- Detect Sale fields ----
     try:
@@ -84,12 +145,8 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         paid_sales_qs = Sale.objects.all()
 
     # ---- TOTAL REVENUE and monthly series ----
-    # If a payment_field exists, aggregate on it (true revenue/encaissé).
     if payment_field:
-        # Sum of the actual payment field across all sales (includes partial payments)
         total_revenue_val = Sale.objects.aggregate(total=Coalesce(Sum(payment_field), Decimal('0')))['total']
-
-        # monthly series aggregated on the payment_field
         sales_by_month_qs = (
             Sale.objects
             .annotate(month=TruncMonth('date_added'))
@@ -98,7 +155,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
             .order_by('month')
         )
     else:
-        # fallback: sum of grand_total but only on sales considered "paid"
         total_revenue_val = paid_sales_qs.aggregate(total=Coalesce(Sum('grand_total'), Decimal('0')))['total']
         sales_by_month_qs = (
             paid_sales_qs
@@ -163,27 +219,22 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     delivery_counts = [int(entry['count']) for entry in deliveries_by_month_qs]
 
     # ---- Recent sales: serialize with unified keys (paid_amount & balance_due) for template compatibility ----
-    # build list of value keys to request from DB
     values_keys = ['id', 'date_added', 'grand_total', 'customer__id', 'customer__first_name', 'customer__last_name', 'customer__phone']
     if payment_field:
         values_keys.append(payment_field)
-    # fetch recent sales (from paid_sales_qs to keep "recent sales" = paid sales)
     recent_qs = paid_sales_qs.order_by('-date_added')[:10]
     recent_sales_raw = list(recent_qs.values(*values_keys))
 
     recent_sales: List[Dict[str, Any]] = []
     for s in recent_sales_raw:
-        # normalize paid_amount key for template (even if actual field is amount_paid)
         paid_val = None
         if payment_field:
             paid_val = s.get(payment_field) or Decimal('0')
-        # ensure numeric float for template
         try:
             paid_val_num = float(paid_val) if paid_val is not None else 0.0
         except Exception:
             paid_val_num = 0.0
 
-        # compute balance_due if possible (grand_total - paid)
         balance_val_num = None
         try:
             gt = s.get('grand_total') or Decimal('0')
@@ -192,7 +243,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         except Exception:
             balance_val_num = None
 
-        # customer label
         cust_name = None
         if s.get('customer__first_name') or s.get('customer__last_name'):
             cust_name = f"{(s.get('customer__first_name') or '').strip()} {(s.get('customer__last_name') or '').strip()}".strip()
@@ -201,9 +251,7 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         recent_sales.append({
             'id': s.get('id'),
             'date_added': s.get('date_added'),
-            # keep original grand_total for reference
             'grand_total': float(s.get('grand_total')) if isinstance(s.get('grand_total'), Decimal) else (float(s.get('grand_total')) if s.get('grand_total') is not None else 0.0),
-            # normalized keys expected by template
             'paid_amount': paid_val_num,
             'balance_due': balance_val_num,
             'customer__phone': s.get('customer__phone'),
@@ -215,7 +263,6 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     try:
         if SaleDetail is not None:
             qs = SaleDetail.objects.all()
-            # If SaleDetail has FK 'sale', limit to paid sales
             if 'sale' in [f.name for f in SaleDetail._meta.get_fields()]:
                 qs = qs.filter(sale__in=paid_sales_qs)
             top_qs = (
@@ -234,11 +281,20 @@ def dashboard(request: HttpRequest) -> HttpResponse:
     # ---- Profiles count ----
     profiles_count = get_user_model().objects.filter(is_staff=True).count()
 
+    # ---- Inventory cost ----
+    total_inventory_cost_val = compute_total_inventory_cost()
+    total_inventory_cost = float(total_inventory_cost_val) if isinstance(total_inventory_cost_val, Decimal) else total_inventory_cost_val
+
+    # ---- Purchase cost ----
+    total_purchase_cost_val = compute_total_purchase_cost()
+    total_purchase_cost = float(total_purchase_cost_val) if isinstance(total_purchase_cost_val, Decimal) else total_purchase_cost_val
+
+    # ---- Context for template ----n    
     context = {
         'total_sales': total_sales,
         'paid_sales_count': paid_sales_count,
         'sales_count': total_sales,
-        'total_revenue': total_revenue,  # revenue based on amount_paid/paid_amount when possible
+        'total_revenue': total_revenue,
         'total_products': total_products,
         'total_items': total_products,
         'profiles_count': profiles_count,
@@ -257,6 +313,10 @@ def dashboard(request: HttpRequest) -> HttpResponse:
         'top_items': top_items,
         'currency': getattr(settings, 'CURRENCY', 'FCFA'),
         'low_stock_threshold': low_stock_threshold,
+        # Inventory cost
+        'total_inventory_cost': total_inventory_cost,
+        'total_purchase_cost': total_purchase_cost,  # Ajout pour le template
+        'inventory_cost_field': None,
     }
     return render(request, 'store/dashboard.html', context)
 
@@ -272,7 +332,6 @@ def get_items_ajax_view(request):
         term = request.GET.get('term', '').strip() if request.method == 'GET' else request.POST.get('term', '').strip()
         qs = Item.objects.all()
         if term:
-            # If Item has description field, include it; otherwise search name only
             if hasattr(Item, 'description'):
                 qs = qs.filter(Q(name__icontains=term) | Q(description__icontains=term))
             else:
@@ -304,12 +363,37 @@ def get_items_ajax_view(request):
         return JsonResponse({'results': [], 'error': str(e)}, status=500)
 
 
+@require_POST
+def delete_item_ajax(request):
+    """
+    Supprime un Item (par id) et renvoie le nouveau coût total de l'inventaire.
+    Permissions: staff required by default (adapte à ton besoin).
+    """
+    if not request.user.is_authenticated or not request.user.is_staff:
+        return JsonResponse({'success': False, 'error': 'Permission denied'}, status=403)
+
+    item_id = request.POST.get('id')
+    if not item_id:
+        return JsonResponse({'success': False, 'error': 'Missing item id'}, status=400)
+
+    try:
+        with transaction.atomic():
+            item = get_object_or_404(Item, pk=item_id)
+            item.delete()
+            new_total = compute_total_inventory_cost()
+            new_total_val = float(new_total) if isinstance(new_total, Decimal) else new_total
+
+        return JsonResponse({'success': True, 'total_inventory_cost': new_total_val})
+    except Item.DoesNotExist:
+        return JsonResponse({'success': False, 'error': 'Item not found'}, status=404)
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
 # --- class-based views unchanged (kept as before) ---
 # ... (rest of CBVs unchanged, omitted for brevity in this snippet)
-# If you want the full file with CBVs included, use the previous full file you had and replace only the dashboard + get_items_ajax_view parts.
 
 
-# --- Class-based views (unchanged) ---
 class ProductListView(LoginRequiredMixin, ExportMixin, tables.SingleTableView):
     model = Item
     table_class = ItemTable

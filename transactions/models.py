@@ -1,4 +1,8 @@
-from django.db import models
+from django.db import models, transaction
+from django.db.models import F
+from decimal import Decimal
+import logging
+logger = logging.getLogger(__name__)
 from django_extensions.db.fields import AutoSlugField
 
 from store.models import Item
@@ -174,15 +178,78 @@ class Purchase(models.Model):
     )
     total_value = models.DecimalField(max_digits=10, decimal_places=2)
 
+    def _apply_stock_add(self, item_id, qty):
+        """ applique qty (peut être négatif) à Item.quantity de façon atomique """
+        from store.models import Item  # correction de l'import (pas .models)
+        if qty == 0:
+            return
+        Item.objects.filter(pk=item_id).update(quantity=F('quantity') + qty)
+        logger.debug("Applied stock change: item=%s qty_delta=%s", item_id, qty)
+
     def save(self, *args, **kwargs):
+        """ Save robuste : gère création, update (delta) et changement d'item. """
+        # calcule total_value
+        try:
+            self.total_value = (self.price or Decimal("0.00")) * (self.quantity or 0)
+        except Exception:
+            self.total_value = Decimal("0.00")
+
+        with transaction.atomic():
+            if self.pk is None:
+                # Nouvelle instance : sauvegarder d'abord pour obtenir pk ensuite
+                super().save(*args, **kwargs)
+                # appliquer la quantité achetée une seule fois
+                self._apply_stock_add(self.item_id, int(self.quantity or 0))
+            else:
+                # Instance existante : lire l'état précédent verrouillé
+                old = Purchase.objects.select_for_update().get(pk=self.pk)
+                old_qty = int(old.quantity or 0)
+                new_qty = int(self.quantity or 0)
+                if old.item_id != self.item_id:
+                    # retirer l'ancienne quantité de l'ancien item
+                    self._apply_stock_add(old.item_id, -old_qty)
+                    # sauvegarder l'objet (changement d'item)
+                    super().save(*args, **kwargs)
+                    # ajouter la nouvelle quantité au nouvel item
+                    self._apply_stock_add(self.item_id, new_qty)
+                else:
+                    # même item : appliquer la delta
+                    delta = new_qty - old_qty
+                    super().save(*args, **kwargs)
+                    if delta != 0:
+                        self._apply_stock_add(self.item_id, delta)
+        # Logging pour debug
+        import traceback
+        logger.debug("Purchase.save called: pk=%s item=%s qty=%s", getattr(self, 'pk', None), getattr(self, 'item_id', None), getattr(self, 'quantity', None))
+        stack = "".join(traceback.format_stack(limit=6))
+        logger.debug("Call stack (recent):\n%s", stack)
+
+    def delete(self, *args, **kwargs):
+        """Au delete, soustraire la quantité correspondante, mais jamais en dessous de zéro."""
+        with transaction.atomic():
+            try:
+                from store.models import Item
+                item = Item.objects.select_for_update().get(pk=self.item_id)
+                if item.quantity - int(self.quantity or 0) < 0:
+                    raise ValueError(
+                        f"Suppression impossible : la quantité de '{item.name}' deviendrait négative."
+                    )
+                item.quantity = item.quantity - int(self.quantity or 0)
+                item.save()
+            except Exception:
+                logger.exception("Erreur lors de la soustraction au delete()")
+                raise  # pour propager l'erreur à la vue ou à l'admin
+            super().delete(*args, **kwargs)
+
+    @property
+    def item_image_url(self):
         """
-        Calculates the total value before saving the Purchase instance.
+        Retourne l'URL de l'image du produit associé à cet achat, ou None si non disponible.
         """
-        self.total_value = self.price * self.quantity
-        super().save(*args, **kwargs)
-        # Update the item quantity
-        self.item.quantity += self.quantity
-        self.item.save()
+        img_field = getattr(self.item, 'image', None)
+        if img_field and hasattr(img_field, 'url'):
+            return img_field.url
+        return None
 
     def __str__(self):
         """

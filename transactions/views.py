@@ -30,36 +30,37 @@ from store.models import Item
 @require_POST
 def get_items(request):
     """
-         Endpoint utilisé par Select2 (POST).
-         Renvoie une liste JSON d'objets avec au moins 'id' et 'text'.
-        J'ajoute ici également la clé 'image' (URL si disponible) pour pouvoir afficher
-        les miniatures côté front si besoin.
-"""
+    Endpoint utilisé par Select2 (POST).
+    Renvoie une liste JSON d'objets avec au moins 'id' et 'text'.
+    """
     term = request.POST.get('term', '').strip()
-    qs = Item.objects.all()
-    if term:
-       qs = qs.filter(name__icontains=term)
-    qs = qs[:20]
 
+    # Si tu ne veux pas renvoyer toute la base quand term est vide, renvoie none()
+    if term:
+        qs = Item.objects.filter(name__icontains=term)
+    else:
+        qs = Item.objects.none()
+
+    qs = qs.order_by('name')[:20]
 
     results = []
     for item in qs:
-      # image handling
-      image_url = ''
-      try:
-        if getattr(item, 'image', None) and hasattr(item.image, 'url'):
-           image_url = item.image.url
-      except Exception:
+        # image handling: crée une URL absolue si possible
         image_url = ''
+        try:
+            if getattr(item, 'image', None) and hasattr(item.image, 'url'):
+                image_url = request.build_absolute_uri(item.image.url)
+        except Exception:
+            image_url = ''
 
+        results.append({
+            "id": item.pk,
+            "text": item.name,   # clé "text" attendue par select2 par défaut
+            "name": item.name,   # tu utilises repo.name dans templateResult, donc garde aussi "name"
+            "price": float(item.price) if getattr(item, 'price', None) is not None else 0,
+            "image": image_url,
+        })
 
-    results.append({
-        "id": item.pk,
-       "text": item.name,
-       "name": item.name,
-      "price": float(item.price) if hasattr(item, 'price') and item.price is not None else 0,
-      "image": image_url,
-    })
     return JsonResponse(results, safe=False)
 
 
